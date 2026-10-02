@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     agent_ip_hour_limit: int = Field(default=30, gt=0)
     agent_global_minute_limit: int = Field(default=10, gt=0)
     agent_event_retention_days: int = Field(default=7, gt=0)
+    speech_model_path: str | None = None
 
     @field_validator("mimo_base_url")
     @classmethod

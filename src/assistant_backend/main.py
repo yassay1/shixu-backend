@@ -9,6 +9,7 @@ from assistant_backend.application.identity import AuthFailure, IdentityService
 from assistant_backend.application.agent_runs import AgentRunService, RunFailure
 from assistant_backend.application.conversations import ConversationFailure, ConversationService
 from assistant_backend.application.tasks import TaskFailure, TaskService
+from assistant_backend.application.speech import SpeechFailure, SpeechService
 from assistant_backend.config import Settings
 from assistant_backend.infrastructure.database import make_engine, make_session_factory
 from assistant_backend.presentation.auth import router as auth_router
@@ -16,6 +17,7 @@ from assistant_backend.presentation.agent import router as agent_router
 from assistant_backend.presentation.conversations import router as conversations_router
 from assistant_backend.presentation.errors import ErrorResponse
 from assistant_backend.presentation.tasks import router as tasks_router
+from assistant_backend.presentation.speech import router as speech_router
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -28,6 +30,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.task_service = TaskService(factory)
     app.state.conversation_service = ConversationService(factory)
     app.state.agent_run_service = AgentRunService(factory, settings)
+    app.state.speech_service = SpeechService(factory, settings)
 
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -65,6 +68,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def run_error(request: Request, exc: RunFailure) -> JSONResponse:
         return error_response(request, exc.code, exc.message, exc.status)
 
+    @app.exception_handler(SpeechFailure)
+    async def speech_error(request: Request, exc: SpeechFailure) -> JSONResponse:
+        return error_response(request, exc.code, exc.message, exc.status)
+
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
         del exc
@@ -88,6 +95,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(tasks_router)
     app.include_router(conversations_router)
     app.include_router(agent_router)
+    app.include_router(speech_router)
     return app
 
 

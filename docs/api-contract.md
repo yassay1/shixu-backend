@@ -1,6 +1,6 @@
 # 拾序前后端接口设计
 
-> 文档状态：已按用户名 + 密码、后端保存账号数据、任务和对话手动删除、永久删除、单 Agent/SSE 更新。语音决定见 [ADR 0004](./adr-0004-local-voice.md)；本节语音接口为阶段 6 目标契约，当前 OpenAPI 尚未实现。
+> 文档状态：阶段 6 后端语音校准与可选回退接口已实现，参数见 [ADR 0005](./adr-0005-speech-stage-6.md)；前端联调仍待验证。
 
 ## 1. 已确认的产品与接口边界
 
@@ -168,28 +168,22 @@ Worker 由 `uv run python -m assistant_backend.worker` 启动，使用数据库 
 
 ## 8. 语音与训练接口
 
-### 语音文字校准（阶段 6 目标，尚未实现）
+### 语音校准与可选回退（首期已确认边界）
 
-前端获得麦克风许可并在本地转写，先展示可编辑的初步文字。`POST /api/voice/drafts/validate` 接收已认证用户的 JSON `{ "transcript": "明天下午三点交周报", "timezone": "Asia/Shanghai" }`；只提交文字，不包含音频、客户端 user_id 或自动发送指令。手动文字输入也可复用该校验。后端不得直接信任 transcript，应校准格式，按 IANA 时区标准化日期/时间，检查完整性、识别任务意图，并按当前账号任务和业务规则核验。响应为可编辑的校准文字、标准化时间/任务候选、意图及需澄清的问题；不明确时返回澄清，不虚构任务 ID 或日期。具体字段和错误码在阶段 6 与前端冻结，不能把此设计示例当作已发布 OpenAPI。
+首选流程是前端完成录音并在本地转写，只提交初步文字结果。后端不得直接信任该结果，负责文本格式校准、可确定的日期/时间标准化、内容完整性检查、任务意图识别和业务规则核验；不能确定的内容返回澄清，不猜测目标任务。默认不上传原始音频。
 
-假设服务端接收日期为 2026-10-02，阶段 6 的最小响应形态建议如下。字段名仍待契约冻结；`due` 复用现有任务日期精度，`task_candidates` 只能来自当前账号，不能把候选当成已确定目标：
+| 方法与路径 | 用途 |
+|---|---|
+| POST /api/transcriptions | JSON 提交初步文字、IANA 时区及可选置信度；同步返回 200 的可编辑校准草稿 |
+| POST /api/transcriptions/audio | 用户明确同意后提交可选 WAV 音频回退；同步返回同一草稿结构 |
 
-```json
-{
-  "status": "ready",
-  "corrected_text": "明天下午三点交周报",
-  "intent": "create_task",
-  "due": { "precision": "minute", "at": "2026-10-03T15:00:00+08:00", "timezone": "Asia/Shanghai" },
-  "task_candidates": [],
-  "clarification": null
-}
-```
+`POST /api/transcriptions` 请求为 `{ "text": "提醒我明天下午3点交周报", "timezone": "Asia/Shanghai", "confidence": 0.8 }`。`confidence` 可省略，范围 0–1，低于 0.55 时建议回退。返回 `{ "draft_text": "…", "intent": "create", "due": {"precision":"minute","at":"…","timezone":"Asia/Shanghai"}, "needs_clarification": false, "clarification": null, "fallback_suggested": false }`。`intent` 可为 `create/update/complete/delete/query/unclear`；`due` 可为空。日期/时间仅对确定表达进行标准化，其余返回澄清。此接口不保存草稿。
 
-无法确定日期、对象或必要内容时返回 `status: "clarification"` 和具体问题，保留可编辑文字；前端让用户改字或回答，再提交新的校准请求。日期相对词以服务端接收时间和所提交的有效 IANA 时区解释，不使用浏览器传来的 `now` 作为事实。后端校准结果仅是待审草稿，不是授权或任务写入指令。
+阶段 6 冻结前曾建议 `/api/voice/drafts/validate` 与 `task_candidates`；它们没有进入当前 OpenAPI。校准接口不查询或选定任务；更新、完成、删除意图需要用户说明具体目标，最终目标归属和业务规则由后续消息/提案/确认用例复查。
 
-校准请求不创建 conversation message、Agent Run 或任务提案，也不写任务。用户主动点击发送后，前端用现有 `POST /api/conversations/{conversation_id}/messages` 提交最终文字；Agent 如提出任务变更，后端必须保存待确认 proposal，用户再调用 `POST /api/proposals/{proposal_id}/confirm` 明确确认。即使用户编辑过转写文字，后端仍重新校验业务规则与授权。
+音频回退使用 `Content-Type: audio/wav` 的原始请求体，查询参数 `timezone` 与 `reason=low_confidence|user_retry|unresolved`，并要求 `X-Audio-Consent: true`。限 16 kHz、单声道、16-bit PCM WAV，最长 20 秒、最大 1 MiB；超限 413，格式错误 422，未同意 403，超额 429，模型未配置或运行失败 503。模型加载与推理合计超过 60 秒时终止子进程，返回 `TRANSCRIPTION_TIMEOUT`（503，可重试）。回退每账号 5 次/日、每 IP 20 次/日、全局 10 次/分钟；上传与调用均需登录、Origin 和 CSRF。原始音频只在内存中处理，请求结束即释放，不保存到数据库、文件或日志。服务器模型从预置目录读取，不在请求中下载。
 
-低置信度本地转写、用户主动重试或后端无法判断时，界面可提供单独的音频上传/二次转写选项；不得默认上传。该回退接口及格式、时长、大小、超时、清理和告知规则在阶段 6 冻结，当前不发布为可用 API。回退完成后仍只返回可编辑文字，不自动创建消息、run 或任务写入。
+校准和回退均不创建 Agent 对话消息或 Agent Run。用户编辑并明确发送草稿后才调用第 6 节的消息 POST；所有任务写入意图仍必须生成待确认提案，并由用户确认。当前语音接口同步返回，不提供 transcription run/SSE。前端本地模型与兼容范围见 ADR 0005。
 
 ### 训练
 
@@ -214,6 +208,6 @@ LLM 密钥仅由后端环境变量或部署 Secret 提供。通用日志只存 r
 
 - 多设备会话列表和其他设备主动注销界面。
 - 跨 origin 部署若需要 CORS，须另行冻结精确来源；当前按同源 Origin 校验。
-- 阶段 6：前端本地模型、浏览器兼容性、音频回退格式、低置信度阈值、隐私告知和临时音频保留策略；回退 provider、限制与费用。
+- 阶段 6 参数已在 ADR 0005 冻结；真实设备性能、中文领域词准确率和前端接入仍需验证。
 - SSE 事件 schema、保留期限、重连行为和 run 取消策略。
 - LLM 供应商、项目预算及账号/IP/全局调用限额。
