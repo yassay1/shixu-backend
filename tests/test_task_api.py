@@ -1,4 +1,5 @@
 import os
+import json
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from threading import Barrier, Event
@@ -14,8 +15,8 @@ from sqlalchemy.engine import make_url
 from assistant_backend.config import Settings
 from assistant_backend.agent.provider import ChatDelta, ProviderFailure, ToolCallDelta
 from assistant_backend.agent.runtime import AgentRuntime
-from assistant_backend.agent.tools import ReadOnlyTaskTools
-from assistant_backend.infrastructure.models import AgentRun, Message, RunEvent, User
+from assistant_backend.agent.tools import ProposalTaskTools, ReadOnlyTaskTools
+from assistant_backend.infrastructure.models import AgentRun, Message, Proposal, RunEvent, User
 from assistant_backend.main import create_app
 from assistant_backend.presentation.agent import _event_stream
 
@@ -526,6 +527,116 @@ def test_agent_worker_runs_read_only_tool_and_sse_replays_persisted_events(
         client.app.state.task_service, current_user_id(client)
     ).invoke("get_task", f'{{"task_id":"{task["task_id"]}"}}')
     assert foreign_tool_result == '{"error": "not_found"}'
+
+
+def test_agent_proposal_tool_requires_confirmation_before_task_write(client: TestClient) -> None:
+    register(client, "first_user")
+    conversation = create_conversation(client, "proposal-conversation")
+    accepted = client.post(
+        f"/api/conversations/{conversation['conversation_id']}/messages",
+        json={"client_message_id": "proposal-question", "content": "请创建一个任务草稿"},
+        headers=write_headers(client),
+    ).json()
+    runs = client.app.state.agent_run_service
+    worker_id = "worker-proposal"
+    assert runs.claim_next(worker_id) == accepted["run_id"]
+
+    class ProposalProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def stream_chat(self, messages: list[dict], tools: list[dict], max_output_tokens: int):
+            del max_output_tokens
+            self.calls += 1
+            if self.calls == 1:
+                assert any(tool["function"]["name"] == "propose_create_task" for tool in tools)
+                yield ChatDelta(
+                    tool_calls=[
+                        ToolCallDelta(
+                            index=0,
+                            call_id="proposal-call-1",
+                            name="propose_create_task",
+                            arguments=json.dumps(
+                                {
+                                    "task": {
+                                        "title": "Prepare demo",
+                                        "important": True,
+                                        "urgent": False,
+                                    }
+                                }
+                            ),
+                        )
+                    ]
+                )
+                return
+            assert any(message["role"] == "tool" for message in messages)
+            yield ChatDelta(content="已保存待确认提案，请确认后写入任务。")
+
+    AgentRuntime(
+        runs,
+        client.app.state.task_service,
+        ProposalProvider(),
+        client.app.state.settings,
+    ).execute(accepted["run_id"], worker_id)
+
+    assert client.get("/api/tasks").json()["items"] == []
+    with client.app.state.agent_run_service.factory() as session:
+        proposal = session.scalar(
+            select(Proposal).where(Proposal.client_request_id.like("agent:%"))
+        )
+        assert proposal is not None
+        proposal_id = proposal.proposal_id
+        assert proposal.source == "agent"
+        assert proposal.status == "pending"
+
+    confirmed = client.post(
+        f"/api/proposals/{proposal_id}/confirm",
+        json={"idempotency_key": "agent-confirm"},
+        headers=write_headers(client),
+    )
+    assert confirmed.status_code == 200
+    assert client.get("/api/tasks").json()["items"][0]["title"] == "Prepare demo"
+
+
+def test_agent_proposal_tools_cover_all_task_operations_without_direct_write(
+    client: TestClient,
+) -> None:
+    register(client, "first_user")
+    created = confirm(
+        client,
+        propose(
+            client,
+            {
+                "client_request_id": "seed-agent-tools",
+                "operation": "create",
+                "task": {"title": "Existing task"},
+            },
+        )["proposal_id"],
+    )["task"]
+    tools = ProposalTaskTools(
+        client.app.state.task_service,
+        current_user_id(client),
+        "run-agent-tools",
+    )
+    calls = (
+        (
+            "propose_update_task",
+            {"task_id": created["task_id"], "expected_version": 1, "changes": {"urgent": True}},
+        ),
+        (
+            "propose_complete_task",
+            {"task_id": created["task_id"], "expected_version": 1},
+        ),
+        (
+            "propose_delete_task",
+            {"task_id": created["task_id"], "expected_version": 1},
+        ),
+    )
+    for index, (name, arguments) in enumerate(calls):
+        result = json.loads(tools.invoke(name, json.dumps(arguments), f"call-{index}"))
+        assert result["status"] == "pending"
+    assert client.get(f"/api/tasks/{created['task_id']}").json()["version"] == 1
+    assert client.get(f"/api/tasks/{created['task_id']}").json()["urgent"] is False
 
 
 def test_agent_rate_limit_and_worker_lease_recovery(client: TestClient) -> None:

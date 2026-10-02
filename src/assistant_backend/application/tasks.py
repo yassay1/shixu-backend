@@ -160,7 +160,9 @@ class TaskService:
                 next_cursor = base64.urlsafe_b64encode(raw).decode().rstrip("=")
             return TaskListResponse(items=items, next_cursor=next_cursor)
 
-    def create_proposal(self, user_id: str, body: ProposalCreateRequest) -> ProposalResponse:
+    def create_proposal(
+        self, user_id: str, body: ProposalCreateRequest, *, source: str = "manual"
+    ) -> ProposalResponse:
         fingerprint = _fingerprint(body)
         now = _now()
         try:
@@ -189,7 +191,7 @@ class TaskService:
                     user_id=user_id,
                     client_request_id=body.client_request_id,
                     request_fingerprint=fingerprint,
-                    source="manual",
+                    source=source,
                     operation=body.operation,
                     task_id=body.task_id,
                     expected_version=body.expected_version,

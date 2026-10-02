@@ -1,10 +1,17 @@
 import json
 from datetime import date
-from typing import Literal
+from typing import Any, Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from assistant_backend.application.tasks import TaskFailure, TaskService
+from assistant_backend.presentation.schemas import (
+    ProposalCreateRequest,
+    ProposalOperation,
+    TaskCreate,
+    TaskPatch,
+)
 
 
 class SearchTaskArguments(BaseModel):
@@ -26,7 +33,7 @@ class GetTaskArguments(BaseModel):
     task_id: str = Field(min_length=1, max_length=36)
 
 
-TASK_TOOLS = [
+READ_ONLY_TASK_TOOLS = [
     {
         "type": "function",
         "function": {
@@ -76,6 +83,97 @@ TASK_TOOLS = [
 ]
 
 
+def _due_schema() -> dict[str, Any]:
+    return {
+        "anyOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "precision": {"const": "date"},
+                    "date": {"type": "string", "format": "date"},
+                    "timezone": {"type": "string"},
+                },
+                "required": ["precision", "date", "timezone"],
+                "additionalProperties": False,
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "precision": {"const": "minute"},
+                    "at": {"type": "string", "format": "date-time"},
+                    "timezone": {"type": "string"},
+                },
+                "required": ["precision", "at", "timezone"],
+                "additionalProperties": False,
+            },
+            {"type": "null"},
+        ]
+    }
+
+
+def _task_properties() -> dict[str, Any]:
+    return {
+        "title": {"type": "string", "minLength": 1, "maxLength": 200},
+        "description": {"type": ["string", "null"], "maxLength": 2000},
+        "category": {"type": ["string", "null"], "maxLength": 64},
+        "due": _due_schema(),
+        "important": {"type": "boolean"},
+        "urgent": {"type": "boolean"},
+    }
+
+
+def _proposal_tool(name: str, description: str, properties: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "strict": False,
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+PROPOSAL_TOOLS = [
+    _proposal_tool(
+        "propose_create_task",
+        "Save a task creation proposal. This never writes a task; the user must confirm it.",
+        {"task": {"type": "object", "properties": _task_properties(), "required": ["title"]}},
+    ),
+    _proposal_tool(
+        "propose_update_task",
+        "Save a task update proposal. The user must confirm it before any task is changed.",
+        {
+            "task_id": {"type": "string", "minLength": 1, "maxLength": 36},
+            "expected_version": {"type": "integer", "minimum": 1},
+            "changes": {"type": "object", "properties": _task_properties(), "required": []},
+        },
+    ),
+    _proposal_tool(
+        "propose_complete_task",
+        "Save a task completion proposal. The user must confirm it before completion.",
+        {
+            "task_id": {"type": "string", "minLength": 1, "maxLength": 36},
+            "expected_version": {"type": "integer", "minimum": 1},
+        },
+    ),
+    _proposal_tool(
+        "propose_delete_task",
+        "Save a task deletion proposal. The user must confirm it before deletion.",
+        {
+            "task_id": {"type": "string", "minLength": 1, "maxLength": 36},
+            "expected_version": {"type": "integer", "minimum": 1},
+        },
+    ),
+]
+
+TASK_TOOLS = [*READ_ONLY_TASK_TOOLS, *PROPOSAL_TOOLS]
+
+
 class ReadOnlyTaskTools:
     def __init__(self, service: TaskService, user_id: str) -> None:
         self.service = service
@@ -106,3 +204,62 @@ class ReadOnlyTaskTools:
             return json.dumps({"error": "invalid_arguments"})
         except TaskFailure as exc:
             return json.dumps({"error": exc.code.lower()})
+
+
+class ProposalTaskTools:
+    def __init__(self, service: TaskService, user_id: str, run_id: str) -> None:
+        self.service = service
+        self.user_id = user_id
+        self.run_id = run_id
+
+    def invoke(self, name: str, raw_arguments: str, call_id: str) -> str:
+        try:
+            raw = json.loads(raw_arguments)
+            if name == "propose_create_task":
+                task = TaskCreate.model_validate(raw["task"])
+                body = ProposalCreateRequest(
+                    client_request_id=self._request_id(call_id),
+                    operation=ProposalOperation.CREATE,
+                    task=task,
+                )
+            elif name == "propose_update_task":
+                body = ProposalCreateRequest(
+                    client_request_id=self._request_id(call_id),
+                    operation=ProposalOperation.UPDATE,
+                    task_id=raw["task_id"],
+                    expected_version=raw["expected_version"],
+                    changes=TaskPatch.model_validate(raw["changes"]),
+                )
+            elif name in {"propose_complete_task", "propose_delete_task"}:
+                body = ProposalCreateRequest(
+                    client_request_id=self._request_id(call_id),
+                    operation=(
+                        ProposalOperation.COMPLETE
+                        if name == "propose_complete_task"
+                        else ProposalOperation.DELETE
+                    ),
+                    task_id=raw["task_id"],
+                    expected_version=raw["expected_version"],
+                )
+            else:
+                return json.dumps({"error": "unknown_tool"})
+            result = self.service.create_proposal(self.user_id, body, source="agent")
+            return json.dumps(
+                {
+                    "proposal_id": result.proposal_id,
+                    "operation": result.operation,
+                    "task_id": result.task_id,
+                    "status": result.status,
+                    "expires_at": result.expires_at,
+                },
+                ensure_ascii=False,
+                default=str,
+            )
+        except (KeyError, TypeError, ValueError, ValidationError):
+            return json.dumps({"error": "invalid_arguments"})
+        except TaskFailure as exc:
+            return json.dumps({"error": exc.code.lower()})
+
+    def _request_id(self, call_id: str) -> str:
+        suffix = call_id or str(uuid4())
+        return f"agent:{self.run_id}:{suffix}"[:128]

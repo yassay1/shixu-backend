@@ -3,14 +3,15 @@ import time
 from collections import defaultdict
 
 from assistant_backend.agent.provider import MimoClient, ProviderFailure, ToolCallDelta
-from assistant_backend.agent.tools import ReadOnlyTaskTools, TASK_TOOLS
+from assistant_backend.agent.tools import ProposalTaskTools, ReadOnlyTaskTools, TASK_TOOLS
 from assistant_backend.application.agent_runs import AgentRunService, RunFailure
 from assistant_backend.application.tasks import TaskService
 from assistant_backend.config import Settings
 
 
-SYSTEM_PROMPT = """你是拾序的事务助理。只回答用户问题，必要时调用只读任务工具。
-你不能创建、修改、完成或删除任务；不得声称已执行任务写入。信息不足时先追问。
+SYSTEM_PROMPT = """你是拾序的事务助理。只回答用户问题，必要时调用任务查询工具。
+你可以为创建、修改、完成或删除任务保存结构化待确认提案，但绝不能直接写入任务；
+提案必须等待用户通过确认接口明确确认。不得声称任务已写入。信息不足时先追问。
 只使用当前对话和工具返回的数据，不推测其他对话或未提供的个人信息。
 工具参数不得包含 user_id。简洁、明确地用中文回复，不输出思维过程。"""
 
@@ -34,6 +35,7 @@ class AgentRuntime:
             user_id, _, history = self.runs.load_messages(run_id)
             messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}, *history]
             tools = ReadOnlyTaskTools(self.tasks, user_id)
+            proposal_tools = ProposalTaskTools(self.tasks, user_id, run_id)
             visible_text: list[str] = []
             used_input = 0
             used_output = 0
@@ -120,7 +122,15 @@ class AgentRuntime:
                     assistant_calls = []
                     for call in call_values:
                         if (
-                            call.name not in {"search_tasks", "get_task"}
+                            call.name
+                            not in {
+                                "search_tasks",
+                                "get_task",
+                                "propose_create_task",
+                                "propose_update_task",
+                                "propose_complete_task",
+                                "propose_delete_task",
+                            }
                             or not call.call_id
                             or len(call.arguments) > 8000
                         ):
@@ -152,7 +162,10 @@ class AgentRuntime:
                             phase="searching_tasks",
                         ):
                             return
-                        result = tools.invoke(call.name, call.arguments)
+                        if call.name.startswith("propose_"):
+                            result = proposal_tools.invoke(call.name, call.arguments, call.call_id)
+                        else:
+                            result = tools.invoke(call.name, call.arguments)
                         messages.append(
                             {"role": "tool", "tool_call_id": call.call_id, "content": result}
                         )
