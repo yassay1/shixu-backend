@@ -14,6 +14,8 @@
 - 任务写入提案：创建、更新、完成、删除提案；确认与取消。确认接口是实际写入任务的唯一入口。
 - 多对话：创建、列表、消息历史、改标题、永久删除。
 - Agent：提交用户消息并创建 run、读取 run、SSE 事件流、PostgreSQL 持久事件、数据库 lease worker、只读任务工具。
+- Agent 可调用受限的任务变更提案 Tool；提案仍须用户调用确认 API 才能写任务。
+- 阶段 6 后端文字校准 `POST /api/transcriptions` 与明确同意后的音频回退 `POST /api/transcriptions/audio`；草稿不保存为消息或 run，参数见 [ADR 0005](./adr-0005-speech-stage-6.md)。
 - MiMo 配置默认值：`https://api.xiaomimimo.com/v1`、`mimo-v2.6-flash`；密钥来自后端 `MIMO_API_KEY`。
 
 ### 前端当前状态
@@ -24,9 +26,8 @@
 
 ### 暂不属于可接入能力
 
-- `/api/voice/drafts/validate`：阶段 6 文字校准目标接口，代码中尚未注册；前端本地转写也未实现。默认不上传音频，见 [ADR 0004](./adr-0004-local-voice.md)。
+- 前端本地转写尚未接入；`/api/voice/drafts/validate` 是阶段 6 冻结前的路径草案，不是当前 OpenAPI 路由。默认不上传音频，见 [ADR 0004](./adr-0004-local-voice.md)。
 - 训练 API：当前不进入后端 OpenAPI；经典 5×5 舒尔特表留在前端，眼动功能已取消。
-- Agent 生成任务写入提案：阶段 5 尚未实现；当前 Agent 只能查询任务。
 - 密码找回、会话列表/踢出其他设备、全量账号删除：未实现。
 
 ## 2. 通用前端调用约定
@@ -359,9 +360,9 @@ type Task = {
 
 消息和 run 在同一事务中写入；相同账号重用 `client_message_id` 且正文相同会返回同一 run 并将 `replayed` 设为 `true`。正文不同返回 `409 IDEMPOTENCY_CONFLICT`。
 
-当前 Agent 的系统规则是只读：只允许 `search_tasks` 和 `get_task`，不能创建、修改、完成或删除任务。模型回答只使用当前对话和当前账号任务。
+Agent 可使用 `search_tasks`、`get_task` 查询当前账号任务，也可调用受限 Tool 生成 create/update/complete/delete 待确认提案；模型不能直接创建、修改、完成或删除任务。模型回答只使用当前对话和当前账号任务。
 
-限额由后端配置实际执行：每 run 最多 16 次模型请求、16 次只读 Tool 调用、180 秒、64K 输入 token、8K 输出 token；每账号 10 次/小时且最多 2 个并发 run，每 IP 30 次/小时，全局 10 次/分钟。超限返回 `429` 或 run 失败码。
+限额由后端配置实际执行：每 run 最多 16 次模型请求、16 次 Tool 调用、180 秒、64K 输入 token、8K 输出 token；每账号 10 次/小时且最多 2 个并发 run，每 IP 30 次/小时，全局 10 次/分钟。超限返回 `429` 或 run 失败码。
 
 ### `GET /api/runs/{run_id}`
 
@@ -424,7 +425,7 @@ data: {"run_id":"run-id","assistant_message_id":"assistant-id","sequence":4}
 | `id`、`done`、字符串 `due` | 使用 `task_id`、`status`、结构化 `due` |
 | `toggle(id)` 直接改状态 | 创建 `complete` 提案，展示预览，调用 confirm 后刷新任务 |
 | `save(task)` 直接插入本地数组 | 创建 `create` 提案，用户确认后 confirm，再用回执更新列表 |
-| `mockProposal()` 推断任务 | 当前 Agent 只读；先用手动任务提案接入真实数据，阶段 5 再接自然语言提案；阶段 6 接本地转写和文字校准 |
+| `mockProposal()` 推断任务 | 手动或 Agent 提案均由后端保存；用户明确确认后才写任务。语音初步文字可调用 `/api/transcriptions` 校准 |
 | 没有账号 | 首屏执行 `/auth/me`，提供注册/登录/退出 |
 | 没有对话页面 | 创建/选择 conversation，消息提交后使用 run 状态和 SSE |
 | 训练页纯前端 | 继续保持本地功能；不要向当前后端发训练请求 |
