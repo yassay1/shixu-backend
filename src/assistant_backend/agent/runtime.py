@@ -1,0 +1,194 @@
+import json
+import time
+from collections import defaultdict
+
+from assistant_backend.agent.provider import MimoClient, ProviderFailure, ToolCallDelta
+from assistant_backend.agent.tools import ReadOnlyTaskTools, TASK_TOOLS
+from assistant_backend.application.agent_runs import AgentRunService, RunFailure
+from assistant_backend.application.tasks import TaskService
+from assistant_backend.config import Settings
+
+
+SYSTEM_PROMPT = """你是拾序的事务助理。只回答用户问题，必要时调用只读任务工具。
+你不能创建、修改、完成或删除任务；不得声称已执行任务写入。信息不足时先追问。
+只使用当前对话和工具返回的数据，不推测其他对话或未提供的个人信息。
+工具参数不得包含 user_id。简洁、明确地用中文回复，不输出思维过程。"""
+
+
+class AgentRuntime:
+    def __init__(
+        self,
+        runs: AgentRunService,
+        tasks: TaskService,
+        provider: MimoClient,
+        settings: Settings,
+    ) -> None:
+        self.runs = runs
+        self.tasks = tasks
+        self.provider = provider
+        self.settings = settings
+
+    def execute(self, run_id: str, worker_id: str) -> None:
+        started = time.monotonic()
+        try:
+            user_id, _, history = self.runs.load_messages(run_id)
+            messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}, *history]
+            tools = ReadOnlyTaskTools(self.tasks, user_id)
+            visible_text: list[str] = []
+            used_input = 0
+            used_output = 0
+            tool_calls_used = 0
+
+            for request_number in range(self.settings.agent_max_model_requests):
+                if time.monotonic() - started >= self.settings.agent_max_run_seconds:
+                    self._fail(run_id, worker_id, "RUN_TIMEOUT")
+                    return
+                estimated_input = self._estimate_tokens(
+                    json.dumps(messages, ensure_ascii=False, separators=(",", ":"))
+                )
+                if used_input + estimated_input > self.settings.agent_max_input_tokens:
+                    self._fail(run_id, worker_id, "INPUT_TOKEN_LIMIT")
+                    return
+                remaining_output = self.settings.agent_max_output_tokens - used_output
+                if remaining_output <= 0:
+                    self._fail(run_id, worker_id, "OUTPUT_TOKEN_LIMIT")
+                    return
+
+                if not self.runs.append_event(
+                    run_id,
+                    worker_id,
+                    "run.status",
+                    {"run_id": run_id, "phase": "thinking"},
+                    phase="thinking",
+                ):
+                    return
+
+                calls: dict[int, ToolCallDelta] = defaultdict(lambda: ToolCallDelta(index=0))
+                response_text: list[str] = []
+                pending_delta = ""
+                request_input_tokens = 0
+                request_output_tokens = 0
+                try:
+                    for chunk in self.provider.stream_chat(
+                        messages,
+                        TASK_TOOLS,
+                        max_output_tokens=min(4096, remaining_output),
+                    ):
+                        if time.monotonic() - started >= self.settings.agent_max_run_seconds:
+                            self._fail(run_id, worker_id, "RUN_TIMEOUT")
+                            return
+                        request_input_tokens = max(request_input_tokens, chunk.input_tokens)
+                        request_output_tokens = max(request_output_tokens, chunk.output_tokens)
+                        for part in chunk.tool_calls:
+                            aggregate = calls[part.index]
+                            aggregate.index = part.index
+                            aggregate.call_id += part.call_id
+                            aggregate.name += part.name
+                            aggregate.arguments += part.arguments
+                        if chunk.content:
+                            response_text.append(chunk.content)
+                            visible_text.append(chunk.content)
+                            pending_delta += chunk.content
+                            if len(pending_delta) >= 48:
+                                if not self._append_delta(run_id, worker_id, pending_delta):
+                                    return
+                                pending_delta = ""
+                except ProviderFailure as exc:
+                    self._fail(run_id, worker_id, exc.code)
+                    return
+                if pending_delta and not self._append_delta(run_id, worker_id, pending_delta):
+                    return
+
+                used_input += request_input_tokens or estimated_input
+                response_string = "".join(response_text)
+                call_output = json.dumps(
+                    [{"name": call.name, "arguments": call.arguments} for call in calls.values()],
+                    ensure_ascii=False,
+                )
+                used_output += request_output_tokens or self._estimate_tokens(
+                    response_string + call_output
+                )
+                if used_output > self.settings.agent_max_output_tokens:
+                    self._fail(run_id, worker_id, "OUTPUT_TOKEN_LIMIT")
+                    return
+                if calls:
+                    call_values = [calls[index] for index in sorted(calls)]
+                    tool_calls_used += len(call_values)
+                    if tool_calls_used > self.settings.agent_max_tool_calls:
+                        self._fail(run_id, worker_id, "TOOL_CALL_LIMIT")
+                        return
+                    assistant_calls = []
+                    for call in call_values:
+                        if (
+                            call.name not in {"search_tasks", "get_task"}
+                            or not call.call_id
+                            or len(call.arguments) > 8000
+                        ):
+                            self._fail(run_id, worker_id, "INVALID_TOOL_CALL")
+                            return
+                        assistant_calls.append(
+                            {
+                                "id": call.call_id,
+                                "type": "function",
+                                "function": {"name": call.name, "arguments": call.arguments},
+                            }
+                        )
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": response_string or None,
+                            "tool_calls": assistant_calls,
+                        }
+                    )
+                    for call in call_values:
+                        if time.monotonic() - started >= self.settings.agent_max_run_seconds:
+                            self._fail(run_id, worker_id, "RUN_TIMEOUT")
+                            return
+                        if not self.runs.append_event(
+                            run_id,
+                            worker_id,
+                            "run.status",
+                            {"run_id": run_id, "phase": "searching_tasks"},
+                            phase="searching_tasks",
+                        ):
+                            return
+                        result = tools.invoke(call.name, call.arguments)
+                        messages.append(
+                            {"role": "tool", "tool_call_id": call.call_id, "content": result}
+                        )
+                    continue
+
+                final_content = "".join(visible_text).strip()
+                if not final_content:
+                    self._fail(run_id, worker_id, "EMPTY_MODEL_RESPONSE")
+                    return
+                self.runs.complete(
+                    run_id,
+                    worker_id,
+                    final_content,
+                    used_input,
+                    used_output,
+                )
+                return
+
+            self._fail(run_id, worker_id, "MODEL_REQUEST_LIMIT")
+        except RunFailure as exc:
+            self._fail(run_id, worker_id, exc.code)
+        except Exception:
+            self._fail(run_id, worker_id, "INTERNAL_ERROR")
+
+    def _fail(self, run_id: str, worker_id: str, code: str) -> None:
+        self.runs.fail(run_id, worker_id, code)
+
+    def _append_delta(self, run_id: str, worker_id: str, text: str) -> bool:
+        return self.runs.append_event(
+            run_id,
+            worker_id,
+            "message.delta",
+            {"run_id": run_id, "text": text},
+            phase="answering",
+        )
+
+    @staticmethod
+    def _estimate_tokens(value: str) -> int:
+        return max(1, (len(value.encode("utf-8")) + 2) // 3)
