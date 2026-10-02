@@ -18,14 +18,14 @@
 
 ### 前端当前状态
 
-`xihack` 当前使用 `xihack-demo-tasks` 这一 `localStorage` key 保存演示任务，任务字段为 `id/title/due/important/urgent/done/category`。当前没有 `fetch`、Axios、Cookie 会话、对话页面或 SSE 客户端，也没有调用旧设计中的 `/api/interpret`、`/api/transcribe`。
+`xihack` 当前使用 `xihack-demo-tasks` 这一 `localStorage` key 保存演示任务，任务字段为 `id/title/due/importance/urgency/importanceReason/urgencyReason/done/category`。当前没有 `fetch`、Axios、Cookie 会话、对话页面或 SSE 客户端，也没有调用旧设计中的 `/api/interpret`、`/api/transcribe`。`TaskComposer` 已在前端录音，但 `transcribeTask` 返回固定模拟文字，尚无本地语音模型。
 
 因此前端接入必须替换本地任务状态和本地 toggle/save 流程；不能把本地 `done` 布尔值直接映射为后端任务写入。后端要求完成、编辑、删除也先创建提案，再由用户确认。
 
 ### 暂不属于可接入能力
 
-- `/api/transcriptions`：代码中尚未注册，语音转写阶段尚未实现。
-- 训练 API：当前不进入后端 OpenAPI。
+- `/api/voice/drafts/validate`：阶段 6 文字校准目标接口，代码中尚未注册；前端本地转写也未实现。默认不上传音频，见 [ADR 0004](./adr-0004-local-voice.md)。
+- 训练 API：当前不进入后端 OpenAPI；经典 5×5 舒尔特表留在前端，眼动功能已取消。
 - Agent 生成任务写入提案：阶段 5 尚未实现；当前 Agent 只能查询任务。
 - 密码找回、会话列表/踢出其他设备、全量账号删除：未实现。
 
@@ -34,10 +34,8 @@
 ### 请求基础设置
 
 ```ts
-const API_ORIGIN = "http://localhost:8000"; // 生产改为实际同源地址
-
 async function apiFetch(path: string, init: RequestInit = {}) {
-  return fetch(`${API_ORIGIN}${path}`, {
+  return fetch(path, {
     ...init,
     credentials: "include",
     headers: {
@@ -50,7 +48,8 @@ async function apiFetch(path: string, init: RequestInit = {}) {
 ```
 
 - 浏览器必须发送 `credentials: "include"`，会话凭证在 HttpOnly Cookie 中，不在 JSON 中返回。
-- `POST`、`PATCH`、`DELETE` 均须发送精确的 `Origin`（后端配置的 `APP_ORIGIN`）和 `X-CSRF-Token`。
+- 注册/登录需要精确 `Origin`；退出及业务写请求还需要 `X-CSRF-Token`。浏览器自动发送 Origin，后端的 `APP_ORIGIN` 必须与页面 origin 完全相同。
+- 当前 FastAPI 未启用 CORS，Vite 也未配置 `/api` 代理。从 `localhost:5173` 直接请求 `localhost:8000` 会被浏览器跨源限制；最小联调应让前端始终调用相对路径 `/api/...`，开发时在 Vite 配置 `/api` 代理到后端，生产时由同源反向代理转发 `/api`。这是接入工作，尚未实现。
 - 先登录或注册，再调用 `GET /api/auth/csrf` 获取 CSRF token；不要把 token 写入 URL。
 - 所有数据接口都由服务端从会话确定账号；前端不要发送 `user_id`，即使发送也不会改变账号范围。
 - 统一错误 JSON：
@@ -425,12 +424,13 @@ data: {"run_id":"run-id","assistant_message_id":"assistant-id","sequence":4}
 | `id`、`done`、字符串 `due` | 使用 `task_id`、`status`、结构化 `due` |
 | `toggle(id)` 直接改状态 | 创建 `complete` 提案，展示预览，调用 confirm 后刷新任务 |
 | `save(task)` 直接插入本地数组 | 创建 `create` 提案，用户确认后 confirm，再用回执更新列表 |
-| `mockProposal()` 推断任务 | 当前后端没有语音/自然语言任务写入；先保留手动表单，或接 Agent 对话查询 |
+| `mockProposal()` 推断任务 | 当前 Agent 只读；先用手动任务提案接入真实数据，阶段 5 再接自然语言提案；阶段 6 接本地转写和文字校准 |
 | 没有账号 | 首屏执行 `/auth/me`，提供注册/登录/退出 |
 | 没有对话页面 | 创建/选择 conversation，消息提交后使用 run 状态和 SSE |
 | 训练页纯前端 | 继续保持本地功能；不要向当前后端发训练请求 |
 
 `xihack` 的四象限显示可以继续使用 `important` 与 `urgent` 计算，但“完成”动作必须经过提案确认。后端不会接受前端的 `done` 字段。
+前端的 0–10 重要度/紧急度及原因字段无法无损写入当前后端布尔字段；迁移字段或调整界面语义须在接入前明确，不得暗中四舍五入并声称已同步原分数。
 
 ## 8. 本地联调
 
@@ -453,7 +453,7 @@ $env:DATABASE_URL = "postgresql+psycopg://shixu:shixu_test_password@127.0.0.1:55
 uv run python -m assistant_backend.worker
 ```
 
-前端开发服务器若使用 `http://localhost:5173`，必须把后端 `APP_ORIGIN` 配成该地址，且前端请求带 `credentials: "include"`；生产建议前后端同源部署，减少 Cookie/CORS 配置复杂度。
+前端开发服务器若使用 `http://localhost:5173`，后端 `APP_ORIGIN` 必须配成该地址；Vite `/api` 代理使浏览器仍从页面同源访问 API，前端请求带 `credentials: "include"`。生产由同源 HTTPS 反向代理转发 `/api`；不要仅改 `APP_ORIGIN` 而遗漏代理配置。
 
 ## 9. 已验证与未验证
 

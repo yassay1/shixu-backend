@@ -1,6 +1,6 @@
 # 拾序前后端接口设计
 
-> 文档状态：已按用户名 + 密码、后端保存账号数据、任务和对话手动删除、永久删除、单 Agent/SSE 与首期语音草稿流程更新。MiMo 模型与阶段 4 限额/SSE 语义已冻结；语音供应商与上传限制待阶段 6 冻结。
+> 文档状态：已按用户名 + 密码、后端保存账号数据、任务和对话手动删除、永久删除、单 Agent/SSE 更新。语音决定见 [ADR 0004](./adr-0004-local-voice.md)；本节语音接口为阶段 6 目标契约，当前 OpenAPI 尚未实现。
 
 ## 1. 已确认的产品与接口边界
 
@@ -12,14 +12,14 @@
 - Agent 查询可直接执行；所有任务写入（包括页面完成勾选）都生成待确认意图，用户确认后执行。
 - 聊天采用两阶段 SSE：先提交消息创建 run 并返回 run_id，再订阅事件；run 状态接口负责断线恢复。
 - LLM 使用小米 MiMo OpenAI 兼容 API 与 `mimo-v2.6-flash`；密钥仅通过后端环境变量或部署 Secret 配置。阶段 4 限额和 SSE 细节见第 6 节；部署美元预算另行配置。
-- 训练暂缓，不进入本期 OpenAPI。语音采用录音结束后上传、可编辑草稿、用户手动发送流程。
+- 前端保留经典 5×5 舒尔特表；无眼动功能，训练不进入本期 OpenAPI。语音采用前端本地转写、后端校准和业务核验、用户手动发送流程；默认只传文字。
 
 ## 2. API 总体结构
 
     React 前端 ── HTTPS JSON/SSE ── FastAPI
                                       ├─ Auth / Tasks / Conversations / Proposals API
                                       ├─ Agent Run API ── MiMo `mimo-v2.6-flash`
-                                      ├─ Transcription API（若确认启用）
+                                      ├─ Voice text validation API（阶段 6）
                                       └─ Application Use Cases ── PostgreSQL
 
 浏览器携带服务端设置的 HttpOnly session Cookie。后端从会话解析 user_id。内部 Agent Tools 不是给浏览器公开调用的接口；它们与任务 API 复用 Application Use Cases。
@@ -168,17 +168,28 @@ Worker 由 `uv run python -m assistant_backend.worker` 启动，使用数据库 
 
 ## 8. 语音与训练接口
 
-### 语音转写（首期已确认流程）
+### 语音文字校准（阶段 6 目标，尚未实现）
 
-推荐的首期用户体验是录音结束后上传音频、后端转写并逐步显示处理结果、用户编辑后再明确发送。上传结束后才能开始显示后端转写文本；这不是边说边出字。
+前端获得麦克风许可并在本地转写，先展示可编辑的初步文字。`POST /api/voice/drafts/validate` 接收已认证用户的 JSON `{ "transcript": "明天下午三点交周报", "timezone": "Asia/Shanghai" }`；只提交文字，不包含音频、客户端 user_id 或自动发送指令。手动文字输入也可复用该校验。后端不得直接信任 transcript，应校准格式，按 IANA 时区标准化日期/时间，检查完整性、识别任务意图，并按当前账号任务和业务规则核验。响应为可编辑的校准文字、标准化时间/任务候选、意图及需澄清的问题；不明确时返回澄清，不虚构任务 ID 或日期。具体字段和错误码在阶段 6 与前端冻结，不能把此设计示例当作已发布 OpenAPI。
 
-| 方法与路径 | 用途 |
-|---|---|
-| POST /api/transcriptions | multipart/form-data 上传音频并创建 transcription run，返回 202 和 transcription_id |
-| GET /api/transcriptions/{transcription_id}/events | SSE 返回转写状态与可用文本片段 |
-| GET /api/transcriptions/{transcription_id} | 断线恢复转写状态与最终文本 |
+假设服务端接收日期为 2026-10-02，阶段 6 的最小响应形态建议如下。字段名仍待契约冻结；`due` 复用现有任务日期精度，`task_candidates` 只能来自当前账号，不能把候选当成已确定目标：
 
-转写完成不会自动创建 Agent 对话消息。音频仅临时处理，完成或失败后清理；格式、大小、时长、并发、超时、用量和用户告知在阶段 6 冻结。用户可编辑草稿后明确发送文本；实时音频不在首期流程内。
+```json
+{
+  "status": "ready",
+  "corrected_text": "明天下午三点交周报",
+  "intent": "create_task",
+  "due": { "precision": "minute", "at": "2026-10-03T15:00:00+08:00", "timezone": "Asia/Shanghai" },
+  "task_candidates": [],
+  "clarification": null
+}
+```
+
+无法确定日期、对象或必要内容时返回 `status: "clarification"` 和具体问题，保留可编辑文字；前端让用户改字或回答，再提交新的校准请求。日期相对词以服务端接收时间和所提交的有效 IANA 时区解释，不使用浏览器传来的 `now` 作为事实。后端校准结果仅是待审草稿，不是授权或任务写入指令。
+
+校准请求不创建 conversation message、Agent Run 或任务提案，也不写任务。用户主动点击发送后，前端用现有 `POST /api/conversations/{conversation_id}/messages` 提交最终文字；Agent 如提出任务变更，后端必须保存待确认 proposal，用户再调用 `POST /api/proposals/{proposal_id}/confirm` 明确确认。即使用户编辑过转写文字，后端仍重新校验业务规则与授权。
+
+低置信度本地转写、用户主动重试或后端无法判断时，界面可提供单独的音频上传/二次转写选项；不得默认上传。该回退接口及格式、时长、大小、超时、清理和告知规则在阶段 6 冻结，当前不发布为可用 API。回退完成后仍只返回可编辑文字，不自动创建消息、run 或任务写入。
 
 ### 训练
 
@@ -203,6 +214,6 @@ LLM 密钥仅由后端环境变量或部署 Secret 提供。通用日志只存 r
 
 - 多设备会话列表和其他设备主动注销界面。
 - 跨 origin 部署若需要 CORS，须另行冻结精确来源；当前按同源 Origin 校验。
-- 语音转写 provider、音频上限、临时保留与费用告知。
+- 阶段 6：前端本地模型、浏览器兼容性、音频回退格式、低置信度阈值、隐私告知和临时音频保留策略；回退 provider、限制与费用。
 - SSE 事件 schema、保留期限、重连行为和 run 取消策略。
 - LLM 供应商、项目预算及账号/IP/全局调用限额。

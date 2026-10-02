@@ -1,10 +1,10 @@
 # 后端架构设计
 
-> 状态：已确认用户名 + 密码、开放自助注册、同账号跨设备共享、首期不提供自助密码找回、服务端保存用户数据、PostgreSQL、单 Agent、首期语音草稿流程与 HTTPS 小规模演示。身份规则见 [ADR 0002](./adr-0002-identity.md)；Agent 限额和语音参数仍待确认。
+> 状态：已确认用户名 + 密码、开放自助注册、同账号跨设备共享、首期不提供自助密码找回、服务端保存用户数据、PostgreSQL、单 Agent、前端本地转写与后端校准/业务核验、HTTPS 小规模演示。身份见 [ADR 0002](./adr-0002-identity.md)，语音见 [ADR 0004](./adr-0004-local-voice.md)。
 
 ## 1. 目标与架构决策
 
-采用 Python / FastAPI 模块化单体，为 React/Vite 前端提供账号认证、事务 API、对话 API、Agent 运行流和后续确认的语音转写能力。PostgreSQL 是账号、任务、对话、消息、提案及 Agent run 的持久化权威数据源。
+采用 Python / FastAPI 模块化单体，为 React/Vite 前端提供账号认证、事务 API、对话 API、Agent 运行流和阶段 6 的转写文字校准/业务核验能力。录音和初步转写归前端；PostgreSQL 是账号、任务、对话、消息、提案及 Agent run 的持久化权威数据源。
 
 首期不采用微服务、Redis、向量数据库或独立工作流引擎。根据已确认的 SSE 两阶段接口（提交消息创建 run，再订阅事件），建议由同一项目中的 Agent worker 从 PostgreSQL 领取待执行 run；API、worker 可使用同一代码包和部署镜像。PostgreSQL 持有待执行 run 与事件，避免把 Redis 或进程内状态当作恢复依据。演示规模下可先共用数据库和单节点，后续按负载拆分部署角色。
 
@@ -54,7 +54,7 @@ API Schema、Application DTO、Domain Entity 和 ORM Model 分开。Agent Tools 
           routes/conversations.py
           routes/agent_runs.py
           routes/proposals.py
-          routes/transcriptions.py
+          routes/voice.py  # 阶段 6 目标，尚未实现
           schemas/
           errors.py
           dependencies.py
@@ -64,7 +64,7 @@ API Schema、Application DTO、Domain Entity 和 ORM Model 分开。Agent Tools 
           conversations/
           agent_runs/
           proposals/
-          transcription/
+          voice_validation/  # 阶段 6 目标，尚未实现
           ports.py
         domain/
           identity/
@@ -140,7 +140,8 @@ Agent 上下文范围仅限当前对话历史、用户本轮消息、必要偏�
 - 小规模 HTTPS 演示设置每账号、每 IP、并发、上传大小、Agent Tool 轮次、响应时长、token 和全局 Provider 预算限制。
 - 通过反向代理做 TLS、请求大小限制、超时和 IP 级基础防护；CORS 仅限制浏览器来源，不是身份验证。
 - 统一异常结构、request_id、LLM 错误映射与受控重试。日志仅记录必要运行元数据和用量，不记录业务正文。
-- 原始音频仅在转写处理期暂存；上传格式/大小/时长白名单和清理策略需在语音方案确认后冻结。
+- 默认只接收前端本地转写的初步文字，按不可信输入校准格式与日期/时间、检查完整性/意图及业务规则；文字校准不创建消息、run 或任务写入。
+- 仅低置信度、用户主动重试或后端无法判断时提供可选音频二次转写；音频回退的格式、上传限制、清理和隐私策略在阶段 6 冻结。
 - PostgreSQL 备份、恢复演练、数据地域、连接池、自动迁移发布策略和精确限额在部署 ADR 中确定。
 - 首期不引入 Redis、LangGraph、独立队列、中间件微服务或向量数据库。若 Postgres 持久化 run 轮询不足，再基于容量证据评估 Redis 做唤醒/限流协调，但不能替代数据库中的 run 真相。
 
@@ -166,5 +167,5 @@ Agent 上下文范围仅限当前对话历史、用户本轮消息、必要偏�
 
 - 用户名允许字符、规范化、大小写和长度规则。
 - 会话 Cookie 空闲/绝对期限、多设备会话列表与单设备注销行为。
-- 转写 provider 与音频格式/大小/时长/保留告知。
+- 阶段 6 的前端本地模型、浏览器兼容性、音频回退格式、低置信度阈值、隐私告知和临时音频保留策略。
 - 阿里云 HTTPS 域名、LLM 项目预算、账号/IP/全局速率值与告警阈值。
