@@ -442,7 +442,7 @@ data: {"run_id":"run-id","assistant_message_id":"assistant-id","sequence":4}
 Set-Location D:\proj\heiks\backend
 uv sync --extra dev
 docker compose -f compose.test.yml up -d --wait
-$env:DATABASE_URL = "postgresql+psycopg://shixu:shixu_test_password@127.0.0.1:55432/shixu_test"
+$env:DATABASE_URL = "postgresql+psycopg://shixu:shixu_test_password@127.0.0.1:55433/shixu_test"
 uv run alembic upgrade head
 uv run uvicorn assistant_backend.main:app --reload
 ```
@@ -451,7 +451,7 @@ uv run uvicorn assistant_backend.main:app --reload
 
 ```powershell
 Set-Location D:\proj\heiks\backend
-$env:DATABASE_URL = "postgresql+psycopg://shixu:shixu_test_password@127.0.0.1:55432/shixu_test"
+$env:DATABASE_URL = "postgresql+psycopg://shixu:shixu_test_password@127.0.0.1:55433/shixu_test"
 uv run python -m assistant_backend.worker
 ```
 
