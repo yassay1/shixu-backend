@@ -44,6 +44,7 @@ class MinuteDue(BaseModel):
 
 
 Due = Annotated[DateDue | MinuteDue, Field(discriminator="precision")]
+Score = Annotated[float, Field(strict=True, ge=0, le=10, multiple_of=0.1)]
 
 
 class TaskCreate(BaseModel):
@@ -53,8 +54,8 @@ class TaskCreate(BaseModel):
     description: str | None = None
     category: str | None = None
     due: Due | None = None
-    important: bool = False
-    urgent: bool = False
+    importance: Score = 5.0
+    urgency: Score = 3.0
 
     @field_validator("title")
     @classmethod
@@ -79,14 +80,14 @@ class TaskPatch(BaseModel):
     description: str | None = None
     category: str | None = None
     due: Due | None = None
-    important: bool | None = None
-    urgent: bool | None = None
+    importance: Score | None = None
+    urgency: Score | None = None
 
     @model_validator(mode="after")
     def nonempty_and_required_values(self) -> "TaskPatch":
         if not self.model_fields_set:
             raise ValueError("At least one task field is required")
-        for field in ("title", "important", "urgent"):
+        for field in ("title", "importance", "urgency"):
             if field in self.model_fields_set and getattr(self, field) is None:
                 raise ValueError(f"{field} cannot be null")
         return self

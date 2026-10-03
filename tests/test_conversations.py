@@ -133,8 +133,8 @@ def test_history_pagination_account_isolation_and_delete_preserves_tasks(
         )
         connection.execute(
             text(
-                "INSERT INTO tasks (task_id, user_id, title, important, urgent, status, version, "
-                "created_at, updated_at) VALUES ('task-kept', :user_id, 'Keep me', false, false, "
+                "INSERT INTO tasks (task_id, user_id, title, importance, urgency, status, version, "
+                "created_at, updated_at) VALUES ('task-kept', :user_id, 'Keep me', 4.0, 3.0, "
                 "'open', 1, :created_at, :updated_at)"
             ),
             {"user_id": user_id, "created_at": timestamp, "updated_at": timestamp},

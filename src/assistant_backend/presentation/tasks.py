@@ -119,8 +119,8 @@ def create_proposal(
                         "operation": "create",
                         "task": {
                             "title": "完成项目周报",
-                            "important": True,
-                            "urgent": False,
+                            "importance": 8.0,
+                            "urgency": 3.0,
                             "due": {
                                 "precision": "date",
                                 "date": "2026-10-09",

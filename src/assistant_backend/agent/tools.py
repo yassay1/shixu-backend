@@ -135,8 +135,18 @@ def _task_properties() -> dict[str, Any]:
         "description": {"type": ["string", "null"], "maxLength": 2000},
         "category": {"type": ["string", "null"], "maxLength": 64},
         "due": _due_schema(),
-        "important": {"type": "boolean"},
-        "urgent": {"type": "boolean"},
+        "importance": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10,
+            "description": "Importance score from 0 to 10 in steps of 0.1; impact matters more than deadline.",
+        },
+        "urgency": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10,
+            "description": "Urgency score from 0 to 10 in steps of 0.1; use deadline and time pressure.",
+        },
     }
 
 
@@ -160,7 +170,13 @@ PROPOSAL_TOOLS = [
     _proposal_tool(
         "propose_create_task",
         "Save a task creation proposal. This never writes a task; the user must confirm it.",
-        {"task": {"type": "object", "properties": _task_properties(), "required": ["title"]}},
+        {
+            "task": {
+                "type": "object",
+                "properties": _task_properties(),
+                "required": ["title", "importance", "urgency"],
+            }
+        },
     ),
     _proposal_tool(
         "propose_update_task",

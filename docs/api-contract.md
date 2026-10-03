@@ -78,7 +78,7 @@ user_id 仅为服务端内部标识，不需要暴露给前端；任何数据 AP
 | GET /api/tasks | 当前账号任务列表、筛选与分页 |
 | GET /api/tasks/{task_id} | 当前账号任务详情 |
 
-列表筛选建议支持 keyword、due_from、due_to、important、urgent、status、category、limit 与 cursor。所有查询强制叠加已认证 user_id 条件。
+列表筛选支持 keyword、due_from、due_to、important、urgent、status、category、limit 与 cursor。important/urgent 筛选以对应分数 6.0 为界，所有查询强制叠加已认证 user_id 条件。
 
 任务响应示例：
 
@@ -86,14 +86,14 @@ user_id 仅为服务端内部标识，不需要暴露给前端；任何数据 AP
       "task_id": "task_123",
       "title": "完成项目周报",
       "due": {"precision": "minute", "at": "2026-10-09T15:00:00+08:00", "timezone": "Asia/Shanghai"},
-      "important": true,
-      "urgent": false,
+      "importance": 8.0,
+      "urgency": 3.0,
       "status": "open",
       "category": "学习",
       "version": 3
     }
 
-task_id 由服务端生成。important 和 urgent 独立保存。`due` 可为 `null`、带日期与 IANA 时区的 `date`，或带分钟精度、UTC 偏移与 IANA 时区的 `minute`；仅日期不解释为午夜。任务状态为 `open`/`completed`，版本从 1 开始。更新字段省略表示不改，`description`、`category`、`due` 的 `null` 表示清空；标题和布尔字段不可置 `null`。所有写入通过第 6 节的统一提案确认，不开放直接任务写路由；当前数据库永久删除，无恢复 API。详见 [ADR 0003](./adr-0003-tasks-confirmation.md)。
+task_id 由服务端生成。importance 和 urgency 独立保存为 0.0–10.0、精确到 0.1 的分数；未提供时分别为 5.0 和 3.0。`due` 可为 `null`、带日期与 IANA 时区的 `date`，或带分钟精度、UTC 偏移与 IANA 时区的 `minute`；仅日期不解释为午夜。任务状态为 `open`/`completed`，版本从 1 开始。更新字段省略表示不改，`description`、`category`、`due` 的 `null` 表示清空；标题和分数字段不可置 `null`。所有写入通过第 6 节的统一提案确认，不开放直接任务写路由；当前数据库永久删除，无恢复 API。详见 [ADR 0003](./adr-0003-tasks-confirmation.md)。
 
 ## 6. 对话、消息与 SSE
 

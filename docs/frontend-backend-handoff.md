@@ -134,8 +134,8 @@ type Task = {
   description: string | null;
   category: string | null;
   due: Due;
-  important: boolean;
-  urgent: boolean;
+  importance: number; // 0.0–10.0, one decimal
+  urgency: number;    // 0.0–10.0, one decimal
   status: "open" | "completed";
   version: number;
   created_at: string;
@@ -148,6 +148,7 @@ type Task = {
 ### `GET /api/tasks` — 列表、筛选、分页
 
 支持查询参数：`keyword`、`due_from`、`due_to`、`important`、`urgent`、`status`（`open|completed`）、`category`、`limit`（1–100，默认 20）、`cursor`。
+`important` 与 `urgent` 查询仍为布尔值，按对应分数是否达到 6.0 过滤。
 
 响应 `200`：
 
@@ -164,8 +165,8 @@ type Task = {
         "at": "2026-10-09T15:00:00+08:00",
         "timezone": "Asia/Shanghai"
       },
-      "important": true,
-      "urgent": false,
+      "importance": 8.0,
+      "urgency": 3.0,
       "status": "open",
       "version": 1,
       "created_at": "2026-10-02T08:00:00Z",
@@ -199,8 +200,8 @@ type Task = {
       "date": "2026-10-09",
       "timezone": "Asia/Shanghai"
     },
-    "important": true,
-    "urgent": false
+    "importance": 8.0,
+    "urgency": 3.0
   }
 }
 ```
@@ -213,7 +214,7 @@ type Task = {
   "operation": "update",
   "task_id": "task-id",
   "expected_version": 1,
-  "changes": { "urgent": true }
+  "changes": { "urgency": 8.0 }
 }
 ```
 
@@ -430,8 +431,8 @@ data: {"run_id":"run-id","assistant_message_id":"assistant-id","sequence":4}
 | 没有对话页面 | 创建/选择 conversation，消息提交后使用 run 状态和 SSE |
 | 训练页纯前端 | 继续保持本地功能；不要向当前后端发训练请求 |
 
-`xihack` 的四象限显示可以继续使用 `important` 与 `urgent` 计算，但“完成”动作必须经过提案确认。后端不会接受前端的 `done` 字段。
-前端的 0–10 重要度/紧急度及原因字段无法无损写入当前后端布尔字段；迁移字段或调整界面语义须在接入前明确，不得暗中四舍五入并声称已同步原分数。
+`xihack` 的四象限显示使用 `importance` 与 `urgency` 分数计算，但“完成”动作必须经过提案确认。后端不会接受前端的 `done` 字段。
+分数按 0.1 精度保存；前端的评分原因字段仍不单独持久化。
 
 ## 8. 本地联调
 

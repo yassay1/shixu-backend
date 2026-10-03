@@ -8,6 +8,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -60,6 +61,8 @@ class Task(Base):
     __table_args__ = (
         CheckConstraint("version >= 1", name="ck_tasks_version_positive"),
         CheckConstraint("status IN ('open', 'completed')", name="ck_tasks_status"),
+        CheckConstraint("importance BETWEEN 0 AND 10", name="ck_tasks_importance_score"),
+        CheckConstraint("urgency BETWEEN 0 AND 10", name="ck_tasks_urgency_score"),
         CheckConstraint(
             "(due_precision IS NULL AND due_date IS NULL AND due_at IS NULL AND due_timezone IS NULL) "
             "OR (due_precision = 'date' AND due_date IS NOT NULL AND due_at IS NULL AND due_timezone IS NOT NULL) "
@@ -79,8 +82,8 @@ class Task(Base):
     due_date: Mapped[date | None] = mapped_column(Date)
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     due_timezone: Mapped[str | None] = mapped_column(String(64))
-    important: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    urgent: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    importance: Mapped[float] = mapped_column(Numeric(3, 1, asdecimal=False), nullable=False)
+    urgency: Mapped[float] = mapped_column(Numeric(3, 1, asdecimal=False), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

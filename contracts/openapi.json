@@ -898,8 +898,8 @@
                     "operation": "create",
                     "task": {
                       "title": "完成项目周报",
-                      "important": true,
-                      "urgent": false,
+                      "importance": 8.0,
+                      "urgency": 3.0,
                       "due": {
                         "precision": "date",
                         "date": "2026-10-09",
@@ -3379,15 +3379,21 @@
             ],
             "title": "Due"
           },
-          "important": {
-            "type": "boolean",
-            "title": "Important",
-            "default": false
+          "importance": {
+            "type": "number",
+            "multipleOf": 0.1,
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Importance",
+            "default": 5.0
           },
-          "urgent": {
-            "type": "boolean",
-            "title": "Urgent",
-            "default": false
+          "urgency": {
+            "type": "number",
+            "multipleOf": 0.1,
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Urgency",
+            "default": 3.0
           }
         },
         "additionalProperties": false,
@@ -3484,27 +3490,33 @@
             ],
             "title": "Due"
           },
-          "important": {
+          "importance": {
             "anyOf": [
               {
-                "type": "boolean"
+                "type": "number",
+                "multipleOf": 0.1,
+                "maximum": 10.0,
+                "minimum": 0.0
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Important"
+            "title": "Importance"
           },
-          "urgent": {
+          "urgency": {
             "anyOf": [
               {
-                "type": "boolean"
+                "type": "number",
+                "multipleOf": 0.1,
+                "maximum": 10.0,
+                "minimum": 0.0
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Urgent"
+            "title": "Urgency"
           }
         },
         "additionalProperties": false,
@@ -3564,15 +3576,21 @@
             ],
             "title": "Due"
           },
-          "important": {
-            "type": "boolean",
-            "title": "Important",
-            "default": false
+          "importance": {
+            "type": "number",
+            "multipleOf": 0.1,
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Importance",
+            "default": 5.0
           },
-          "urgent": {
-            "type": "boolean",
-            "title": "Urgent",
-            "default": false
+          "urgency": {
+            "type": "number",
+            "multipleOf": 0.1,
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Urgency",
+            "default": 3.0
           },
           "task_id": {
             "type": "string",

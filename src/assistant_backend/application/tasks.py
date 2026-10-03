@@ -58,8 +58,8 @@ def _task_response(task: Task) -> TaskResponse:
         description=task.description,
         category=task.category,
         due=due,
-        important=task.important,
-        urgent=task.urgent,
+        importance=task.importance,
+        urgency=task.urgency,
         status=task.status,
         version=task.version,
         created_at=task.created_at,
@@ -132,9 +132,9 @@ class TaskService:
         if due_to:
             statement = statement.where(Task.due_date <= due_to)
         if important is not None:
-            statement = statement.where(Task.important == important)
+            statement = statement.where(Task.importance >= 6 if important else Task.importance < 6)
         if urgent is not None:
-            statement = statement.where(Task.urgent == urgent)
+            statement = statement.where(Task.urgency >= 6 if urgent else Task.urgency < 6)
         if status:
             statement = statement.where(Task.status == status)
         if category:
@@ -304,8 +304,8 @@ class TaskService:
                     title=fields.title,
                     description=fields.description,
                     category=fields.category,
-                    important=fields.important,
-                    urgent=fields.urgent,
+                    importance=fields.importance,
+                    urgency=fields.urgency,
                     status="open",
                     version=1,
                     created_at=now,

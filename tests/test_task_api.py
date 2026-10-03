@@ -83,12 +83,23 @@ def confirm(client: TestClient, proposal_id: str, key: str = "confirm-1") -> dic
 
 def test_create_requires_confirmation_and_retries_are_idempotent(client: TestClient) -> None:
     register(client, "first_user")
+    for score in (True, 10.1, 5.25):
+        invalid = client.post(
+            "/api/proposals",
+            json={
+                "client_request_id": f"invalid-score-{score}",
+                "operation": "create",
+                "task": {"title": "Bad score", "importance": score},
+            },
+            headers=write_headers(client),
+        )
+        assert invalid.status_code == 422
     body = {
         "client_request_id": "request-1",
         "operation": "create",
         "task": {
             "title": "  Plan work  ",
-            "important": True,
+            "importance": 8.0,
             "due": {"precision": "date", "date": "2026-10-09", "timezone": "Asia/Shanghai"},
         },
     }
@@ -114,6 +125,8 @@ def test_create_requires_confirmation_and_retries_are_idempotent(client: TestCli
     )
     task = receipt["task"]
     assert task["title"] == "Plan work"
+    assert task["importance"] == 8.0
+    assert task["urgency"] == 3.0
     assert task["due"]["precision"] == "date"
     assert task["version"] == 1
     assert client.get("/api/tasks").json()["items"] == [task]
@@ -132,11 +145,11 @@ def test_create_requires_confirmation_and_retries_are_idempotent(client: TestCli
                 "operation": "update",
                 "task_id": task["task_id"],
                 "expected_version": 1,
-                "changes": {"urgent": True},
+                "changes": {"urgency": 8.0},
             },
         )
         confirm(second_device, updated["proposal_id"], "other-device-key")
-    assert client.get(f"/api/tasks/{task['task_id']}").json()["urgent"] is True
+    assert client.get(f"/api/tasks/{task['task_id']}").json()["urgency"] == 8.0
 
 
 def test_cross_account_version_conflict_and_delete_invalidation(client: TestClient) -> None:
@@ -271,7 +284,7 @@ def test_failed_confirmation_rolls_back_and_filter_pagination(client: TestClient
         {
             "client_request_id": "first",
             "operation": "create",
-            "task": {"title": "First", "important": True},
+            "task": {"title": "First", "importance": 8.0},
         },
     )
     with TestClient(client.app, base_url=ORIGIN, raise_server_exceptions=False) as failing:
@@ -294,7 +307,7 @@ def test_failed_confirmation_rolls_back_and_filter_pagination(client: TestClient
         {
             "client_request_id": "second",
             "operation": "create",
-            "task": {"title": "Second", "important": False},
+            "task": {"title": "Second", "importance": 4.0},
         },
     )
     second_task = confirm(client, second["proposal_id"], "second-key")["task"]
@@ -459,7 +472,7 @@ def test_agent_worker_runs_read_only_tool_and_sse_replays_persisted_events(
         {
             "client_request_id": "task-for-agent",
             "operation": "create",
-            "task": {"title": "Prepare demo", "important": True},
+            "task": {"title": "Prepare demo", "importance": 8.0},
         },
     )
     task = confirm(client, proposal["proposal_id"])["task"]
@@ -571,8 +584,8 @@ def test_agent_proposal_tool_requires_confirmation_before_task_write(client: Tes
                                             "date": "2026-10-04",
                                             "timezone": "Asia/Shanghai",
                                         },
-                                        "important": True,
-                                        "urgent": True,
+                                        "importance": 8.5,
+                                        "urgency": 9.0,
                                     }
                                 }
                             ),
@@ -586,8 +599,8 @@ def test_agent_proposal_tool_requires_confirmation_before_task_write(client: Tes
                                     "task": {
                                         "title": "给妈妈打电话",
                                         "category": "家庭",
-                                        "important": True,
-                                        "urgent": False,
+                                        "importance": 7.0,
+                                        "urgency": 3.0,
                                     }
                                 }
                             ),
@@ -615,8 +628,8 @@ def test_agent_proposal_tool_requires_confirmation_before_task_write(client: Tes
         "description": "检查数学题约半小时",
         "category": "学习",
         "due": {"precision": "date", "date": "2026-10-04", "timezone": "Asia/Shanghai"},
-        "important": True,
-        "urgent": True,
+        "importance": 8.5,
+        "urgency": 9.0,
     }
     assert by_title["给妈妈打电话"]["task"]["due"] is None
     with client.app.state.agent_run_service.factory() as session:
@@ -736,7 +749,7 @@ def test_agent_proposal_tools_cover_all_task_operations_without_direct_write(
     calls = (
         (
             "propose_update_task",
-            {"task_id": created["task_id"], "expected_version": 1, "changes": {"urgent": True}},
+            {"task_id": created["task_id"], "expected_version": 1, "changes": {"urgency": 8.0}},
         ),
         (
             "propose_complete_task",
@@ -751,7 +764,7 @@ def test_agent_proposal_tools_cover_all_task_operations_without_direct_write(
         result = json.loads(tools.invoke(name, json.dumps(arguments), f"call-{index}"))
         assert result["status"] == "pending"
     assert client.get(f"/api/tasks/{created['task_id']}").json()["version"] == 1
-    assert client.get(f"/api/tasks/{created['task_id']}").json()["urgent"] is False
+    assert client.get(f"/api/tasks/{created['task_id']}").json()["urgency"] == 3.0
 
 
 def test_agent_rate_limit_and_worker_lease_recovery(client: TestClient) -> None:
