@@ -31,6 +31,42 @@ class ProviderFailure(Exception):
         self.retryable = retryable
 
 
+def _deepseek_schema(schema: dict) -> dict:
+    if "anyOf" in schema:
+        variants = [part for part in schema["anyOf"] if part.get("type") == "object"]
+        properties = {
+            name: _deepseek_schema(value)
+            for variant in variants
+            for name, value in variant["properties"].items()
+            if name != "precision"
+        }
+        properties["precision"] = {"type": "string", "enum": ["date", "minute"]}
+        return {
+            "type": "object",
+            "description": "Use precision=date with date, or precision=minute with at; include timezone.",
+            "properties": properties,
+            "required": ["precision", "timezone"],
+            "additionalProperties": False,
+        }
+    result = dict(schema)
+    if isinstance(result.get("type"), list):
+        result["type"] = next(value for value in result["type"] if value != "null")
+    if "const" in result:
+        result["type"] = "string"
+    if "enum" in result:
+        result["enum"] = [value for value in result["enum"] if value is not None]
+    if "properties" in result:
+        original = result["properties"]
+        result["properties"] = {name: _deepseek_schema(value) for name, value in original.items()}
+        result["required"] = [
+            name
+            for name in result.get("required", [])
+            if "null" not in original[name].get("type", [])
+            and not any(part.get("type") == "null" for part in original[name].get("anyOf", []))
+        ]
+    return result
+
+
 class ChatCompletionClient:
     """Small OpenAI-compatible client; errors never include provider bodies."""
 
@@ -64,8 +100,11 @@ class ChatCompletionClient:
                     {
                         **tool,
                         "function": {
-                            key: value for key, value in tool["function"].items() if key != "strict"
-                        },
+                            key: value
+                            for key, value in tool["function"].items()
+                            if key not in {"strict", "parameters"}
+                        }
+                        | {"parameters": _deepseek_schema(tool["function"]["parameters"])},
                     }
                     for tool in tools
                 ]
@@ -143,5 +182,7 @@ class ChatReportAnalyzer:
                 [],
                 500,
             )
-        )
+        ).strip()
+        if content.startswith("```json\n") and content.endswith("```"):
+            content = content[8:-3].strip()
         return ReportInsight.model_validate_json(content)

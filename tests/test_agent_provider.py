@@ -5,7 +5,13 @@ from urllib.error import HTTPError
 import pytest
 from pydantic import SecretStr
 
-from assistant_backend.agent.provider import ChatCompletionClient, ProviderFailure
+from assistant_backend.agent.provider import (
+    ChatCompletionClient,
+    ChatDelta,
+    ChatReportAnalyzer,
+    ProviderFailure,
+)
+from assistant_backend.agent.tools import TASK_TOOLS
 from assistant_backend.config import Settings
 
 
@@ -114,12 +120,7 @@ def test_openai_next_deepseek_selection_and_request_shape(monkeypatch) -> None:
         mimo_api_key="mimo-test-key",
     )
     client = ChatCompletionClient(*settings.chat_provider)
-    tools = [
-        {
-            "type": "function",
-            "function": {"name": "search_tasks", "strict": True, "parameters": {"type": "object"}},
-        }
-    ]
+    tools = TASK_TOOLS
     assert "".join(chunk.content for chunk in client.stream_chat([], tools, 100)) == "好的"
     request = seen["request"]
     body = json.loads(request.data)
@@ -128,12 +129,41 @@ def test_openai_next_deepseek_selection_and_request_shape(monkeypatch) -> None:
     assert body["model"] == "deepseek-v3.2"
     assert body["max_tokens"] == 100
     assert body["tool_choice"] == "auto"
-    assert "strict" not in body["tools"][0]["function"]
+    search = next(
+        tool["function"] for tool in body["tools"] if tool["function"]["name"] == "search_tasks"
+    )
+    create = next(
+        tool["function"]
+        for tool in body["tools"]
+        if tool["function"]["name"] == "propose_create_task"
+    )
+    assert "strict" not in search
+    assert search["parameters"]["properties"]["keyword"]["type"] == "string"
+    assert "keyword" not in search["parameters"]["required"]
+    assert create["parameters"]["properties"]["task"]["properties"]["due"]["type"] == "object"
     assert "thinking" not in body
     assert "max_completion_tokens" not in body
-    assert tools[0]["function"]["strict"] is True
+    assert (
+        next(tool for tool in tools if tool["function"]["name"] == "search_tasks")["function"][
+            "strict"
+        ]
+        is True
+    )
 
 
 def test_openai_next_base_url_cannot_send_key_to_unapproved_host() -> None:
     with pytest.raises(ValueError, match="official HTTPS API endpoint"):
         Settings(_env_file=None, openai_next_base_url="https://example.com/v1")
+
+
+def test_report_analyzer_accepts_fenced_json_from_deepseek() -> None:
+    class FencedJsonClient:
+        def stream_chat(self, messages, tools, max_output_tokens):
+            del messages, tools, max_output_tokens
+            yield ChatDelta(
+                content='```json\n{"summary":"完成了","blocker":"耗时","next_step":"先限时"}\n```'
+            )
+
+    insight = ChatReportAnalyzer(FencedJsonClient())("task", "report")
+    assert insight.summary == "完成了"
+    assert insight.next_step == "先限时"
