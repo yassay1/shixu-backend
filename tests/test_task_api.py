@@ -599,6 +599,7 @@ def test_agent_proposal_tool_requires_confirmation_before_task_write(client: Tes
                                     "task": {
                                         "title": "给妈妈打电话",
                                         "category": "家庭",
+                                        "due": None,
                                         "importance": 7.0,
                                         "urgency": 3.0,
                                     }

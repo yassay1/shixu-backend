@@ -11,7 +11,7 @@ from assistant_backend.agent.provider import (
     ChatReportAnalyzer,
     ProviderFailure,
 )
-from assistant_backend.agent.tools import TASK_TOOLS
+from assistant_backend.agent.tools import TASK_TOOLS, ProposalTaskTools
 from assistant_backend.config import Settings
 
 
@@ -169,6 +169,7 @@ def test_openai_next_deepseek_selection_and_request_shape(monkeypatch) -> None:
     assert search["parameters"]["properties"]["keyword"]["type"] == "string"
     assert "keyword" not in search["parameters"]["required"]
     assert create["parameters"]["properties"]["task"]["properties"]["due"]["type"] == "object"
+    assert "category" in create["parameters"]["properties"]["task"]["required"]
     assert "thinking" not in body
     assert "max_completion_tokens" not in body
     assert (
@@ -195,3 +196,27 @@ def test_report_analyzer_accepts_fenced_json_from_deepseek() -> None:
     insight = ChatReportAnalyzer(FencedJsonClient())("task", "report")
     assert insight.summary == "完成了"
     assert insight.next_step == "先限时"
+
+
+def test_create_proposal_requires_interpreted_fields_before_saving() -> None:
+    class Service:
+        def create_proposal(self, *_args, **_kwargs):
+            raise AssertionError("An incomplete transcript must not become a proposal")
+
+    tools = ProposalTaskTools(Service(), "user", "run")
+    result = tools.invoke(
+        "propose_create_task",
+        json.dumps({"task": {"title": "I need to meet my professor tomorrow at 3 pm"}}),
+        "call",
+    )
+    assert json.loads(result)["error"] == "incomplete_task"
+    create = next(
+        tool["function"] for tool in TASK_TOOLS if tool["function"]["name"] == "propose_create_task"
+    )
+    assert set(create["parameters"]["properties"]["task"]["required"]) == {
+        "title",
+        "category",
+        "due",
+        "importance",
+        "urgency",
+    }

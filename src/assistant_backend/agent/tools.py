@@ -169,12 +169,14 @@ def _proposal_tool(name: str, description: str, properties: dict[str, Any]) -> d
 PROPOSAL_TOOLS = [
     _proposal_tool(
         "propose_create_task",
-        "Save a task creation proposal. This never writes a task; the user must confirm it.",
+        "Save an interpreted task proposal, with a short action title, inferred category and scores, and a due date/time or null. Never copy the whole utterance into the title. The user must confirm it.",
         {
             "task": {
                 "type": "object",
-                "properties": _task_properties(),
-                "required": ["title", "importance", "urgency"],
+                "properties": _task_properties()
+                | {"category": {"type": "string", "minLength": 1, "maxLength": 64}},
+                "required": ["title", "category", "due", "importance", "urgency"],
+                "additionalProperties": False,
             }
         },
     ),
@@ -254,8 +256,21 @@ class ProposalTaskTools:
     def invoke(self, name: str, raw_arguments: str, call_id: str) -> str:
         try:
             raw = json.loads(raw_arguments)
+            if not isinstance(raw, dict):
+                return json.dumps({"error": "invalid_arguments"})
             if name == "propose_create_task":
-                task = TaskCreate.model_validate(raw["task"])
+                task_fields = raw.get("task")
+                required = {"title", "category", "importance", "urgency"}
+                if not isinstance(task_fields, dict) or not required <= task_fields.keys():
+                    return json.dumps(
+                        {
+                            "error": "incomplete_task",
+                            "hint": "Provide a concise title, inferred category, importance and urgency; include a due date/time when stated.",
+                        }
+                    )
+                task = TaskCreate.model_validate(task_fields)
+                if not task.category:
+                    return json.dumps({"error": "incomplete_task", "hint": "Infer a category."})
                 body = ProposalCreateRequest(
                     client_request_id=self._request_id(call_id),
                     operation=ProposalOperation.CREATE,
