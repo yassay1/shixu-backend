@@ -151,6 +151,7 @@ Worker 由 `uv run python -m assistant_backend.worker` 启动，使用数据库 
 | 方法与路径 | 用途 |
 |---|---|
 | POST /api/proposals | 保存手动创建、更新、完成或删除任务的待确认意图，不修改任务 |
+| GET /api/runs/{run_id}/proposals | 列出当前账号该 Agent run 保存的提案，供前端逐项确认 |
 | GET /api/proposals/{proposal_id} | 读取当前账号提案预览与状态 |
 | POST /api/proposals/{proposal_id}/confirm | 用户确认并执行提案 |
 | POST /api/proposals/{proposal_id}/cancel | 用户取消提案 |

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import base64
 import hashlib
 import json
@@ -226,6 +228,19 @@ class TaskService:
             if proposal is None:
                 raise TaskFailure("NOT_FOUND", 404, "Proposal not found")
             return _proposal_response(proposal)
+
+    def proposals_for_run(self, user_id: str, run_id: str) -> list[ProposalResponse]:
+        with self.factory() as session:
+            proposals = session.scalars(
+                select(Proposal)
+                .where(
+                    Proposal.user_id == user_id,
+                    Proposal.source == "agent",
+                    Proposal.client_request_id.startswith(f"agent:{run_id}:"),
+                )
+                .order_by(Proposal.created_at, Proposal.proposal_id)
+            )
+            return [_proposal_response(proposal) for proposal in proposals]
 
     def confirm(self, user_id: str, proposal_id: str, key: str) -> ConfirmationReceipt:
         key_hash = hashlib.sha256(key.encode()).hexdigest()

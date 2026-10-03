@@ -8,9 +8,9 @@ from pydantic import SecretStr
 from assistant_backend.agent.provider import MimoClient, ProviderFailure
 
 
-class FakeResponse:
-    def __init__(self, lines: list[bytes]) -> None:
-        self.lines = lines
+class FakeResponse(io.BytesIO):
+    def __init__(self, value: dict) -> None:
+        super().__init__(json.dumps(value).encode())
 
     def __enter__(self) -> "FakeResponse":
         return self
@@ -18,42 +18,26 @@ class FakeResponse:
     def __exit__(self, *_args: object) -> None:
         return None
 
-    def __iter__(self):
-        return iter(self.lines)
 
-
-def _data(value: dict) -> bytes:
-    return f"data: {json.dumps(value)}\n\n".encode()
-
-
-def test_mimo_client_parses_stream_and_keeps_api_key_in_header(monkeypatch) -> None:
+def test_mimo_client_parses_tool_response_and_keeps_api_key_in_header(monkeypatch) -> None:
     seen = {}
     response = FakeResponse(
-        [
-            _data({"choices": [{"delta": {"content": "Hello"}}]}),
-            _data(
+        {
+            "choices": [
                 {
-                    "choices": [
-                        {
-                            "delta": {
-                                "tool_calls": [
-                                    {
-                                        "index": 0,
-                                        "id": "call-1",
-                                        "function": {
-                                            "name": "get_task",
-                                            "arguments": '{"task_id":"abc"}',
-                                        },
-                                    }
-                                ]
+                    "message": {
+                        "content": "Hello",
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "function": {"name": "get_task", "arguments": '{"task_id":"abc"}'},
                             }
-                        }
-                    ]
+                        ],
+                    }
                 }
-            ),
-            _data({"choices": [], "usage": {"prompt_tokens": 12, "completion_tokens": 4}}),
-            b"data: [DONE]\n\n",
-        ]
+            ],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 4},
+        }
     )
 
     def fake_urlopen(request, timeout):
@@ -67,8 +51,8 @@ def test_mimo_client_parses_stream_and_keeps_api_key_in_header(monkeypatch) -> N
     )
     chunks = list(client.stream_chat([{"role": "user", "content": "test"}], [], 8))
     assert "Hello" == "".join(chunk.content for chunk in chunks)
-    assert chunks[1].tool_calls[0].name == "get_task"
-    assert chunks[1].tool_calls[0].arguments == '{"task_id":"abc"}'
+    assert chunks[0].tool_calls[0].name == "get_task"
+    assert chunks[0].tool_calls[0].arguments == '{"task_id":"abc"}'
     assert chunks[-1].input_tokens == 12
     assert chunks[-1].output_tokens == 4
     assert seen["request"].full_url == "https://api.xiaomimimo.com/v1/chat/completions"
@@ -77,7 +61,7 @@ def test_mimo_client_parses_stream_and_keeps_api_key_in_header(monkeypatch) -> N
     request_body = json.loads(seen["request"].data)
     assert request_body["model"] == "mimo-v2.6-flash"
     assert request_body["max_completion_tokens"] == 8
-    assert request_body["stream"] is True
+    assert request_body["stream"] is False
     assert request_body["thinking"] == {"type": "disabled"}
 
 

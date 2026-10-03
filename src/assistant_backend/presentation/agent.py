@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse
 
 from assistant_backend.application.agent_dto import RunEventView, RunStatus
 from assistant_backend.application.agent_runs import AgentRunService, RunFailure
+from assistant_backend.presentation.schemas import ProposalResponse
 from assistant_backend.application.identity import SessionIdentity
 from assistant_backend.presentation.agent_schemas import (
     MessageSubmitRequest,
@@ -64,6 +65,17 @@ def get_run(
     service: Annotated[AgentRunService, Depends(get_service)],
 ) -> RunStatusResponse:
     return RunStatusResponse(**service.get(identity.user_id, run_id).__dict__)
+
+
+@router.get("/runs/{run_id}/proposals", response_model=list[ProposalResponse])
+def get_run_proposals(
+    run_id: str,
+    request: Request,
+    identity: Annotated[SessionIdentity, Depends(get_identity)],
+    service: Annotated[AgentRunService, Depends(get_service)],
+) -> list[ProposalResponse]:
+    service.get(identity.user_id, run_id)
+    return request.app.state.task_service.proposals_for_run(identity.user_id, run_id)
 
 
 def _sse(event: RunEventView) -> str:

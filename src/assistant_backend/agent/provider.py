@@ -30,7 +30,7 @@ class ProviderFailure(Exception):
 
 
 class MimoClient:
-    """Small OpenAI-compatible streaming client; errors never include provider bodies."""
+    """Small OpenAI-compatible client; errors never include provider bodies."""
 
     def __init__(self, api_key: SecretStr | None, base_url: str, model: str) -> None:
         self.api_key = api_key
@@ -51,8 +51,7 @@ class MimoClient:
                 "messages": messages,
                 "tools": tools,
                 "tool_choice": "auto",
-                "stream": True,
-                "stream_options": {"include_usage": True},
+                "stream": False,
                 "max_completion_tokens": max_output_tokens,
                 "thinking": {"type": "disabled"},
             },
@@ -64,47 +63,33 @@ class MimoClient:
             headers={
                 "Authorization": f"Bearer {self.api_key.get_secret_value()}",
                 "Content-Type": "application/json",
-                "Accept": "text/event-stream",
+                "Accept": "application/json",
             },
             method="POST",
         )
         try:
             with urlopen(request, timeout=35) as response:
-                finished = False
-                for raw_line in response:
-                    line = raw_line.decode("utf-8", errors="replace").strip()
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if data == "[DONE]":
-                        finished = True
-                        return
-                    try:
-                        chunk = json.loads(data)
-                    except json.JSONDecodeError as exc:
-                        raise ProviderFailure("MODEL_INVALID_RESPONSE", True) from exc
-                    usage = chunk.get("usage") or {}
-                    delta = ChatDelta(
+                try:
+                    result = json.load(response)
+                    message = result["choices"][0]["message"]
+                    usage = result.get("usage") or {}
+                    calls = [
+                        ToolCallDelta(
+                            index=index,
+                            call_id=part["id"],
+                            name=part["function"]["name"],
+                            arguments=part["function"]["arguments"],
+                        )
+                        for index, part in enumerate(message.get("tool_calls") or [])
+                    ]
+                    yield ChatDelta(
+                        content=message.get("content") or "",
+                        tool_calls=calls,
                         input_tokens=int(usage.get("prompt_tokens", 0)),
                         output_tokens=int(usage.get("completion_tokens", 0)),
                     )
-                    choices = chunk.get("choices") or []
-                    if choices:
-                        payload = choices[0].get("delta") or {}
-                        delta.content = payload.get("content") or ""
-                        for part in payload.get("tool_calls") or []:
-                            function = part.get("function") or {}
-                            delta.tool_calls.append(
-                                ToolCallDelta(
-                                    index=int(part.get("index", 0)),
-                                    call_id=part.get("id") or "",
-                                    name=function.get("name") or "",
-                                    arguments=function.get("arguments") or "",
-                                )
-                            )
-                    yield delta
-                if not finished:
-                    raise ProviderFailure("MODEL_TRUNCATED_RESPONSE", True)
+                except (KeyError, IndexError, TypeError, ValueError) as exc:
+                    raise ProviderFailure("MODEL_INVALID_RESPONSE", True) from exc
         except HTTPError as exc:
             status = exc.code
             if status == 401:

@@ -580,6 +580,9 @@ def test_agent_proposal_tool_requires_confirmation_before_task_write(client: Tes
     ).execute(accepted["run_id"], worker_id)
 
     assert client.get("/api/tasks").json()["items"] == []
+    run_proposals = client.get(f"/api/runs/{accepted['run_id']}/proposals")
+    assert run_proposals.status_code == 200
+    assert len(run_proposals.json()) == 1
     with client.app.state.agent_run_service.factory() as session:
         proposal = session.scalar(
             select(Proposal).where(Proposal.client_request_id.like("agent:%"))
@@ -588,6 +591,7 @@ def test_agent_proposal_tool_requires_confirmation_before_task_write(client: Tes
         proposal_id = proposal.proposal_id
         assert proposal.source == "agent"
         assert proposal.status == "pending"
+    assert run_proposals.json()[0]["proposal_id"] == proposal_id
 
     confirmed = client.post(
         f"/api/proposals/{proposal_id}/confirm",
@@ -596,6 +600,8 @@ def test_agent_proposal_tool_requires_confirmation_before_task_write(client: Tes
     )
     assert confirmed.status_code == 200
     assert client.get("/api/tasks").json()["items"][0]["title"] == "Prepare demo"
+    register(client, "second_user")
+    assert client.get(f"/api/runs/{accepted['run_id']}/proposals").status_code == 404
 
 
 def test_agent_proposal_tools_cover_all_task_operations_without_direct_write(
