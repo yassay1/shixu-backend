@@ -1,6 +1,6 @@
 import io
 import json
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 import pytest
 from pydantic import SecretStr
@@ -98,6 +98,28 @@ def test_mimo_client_maps_provider_auth_failure_without_response_body(
         list(client.stream_chat([{"role": "user", "content": "test"}], [], 8))
     assert error.value.code == expected_code
     assert "sensitive" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "first_failure", [URLError("offline"), HTTPError("url", 503, "", {}, None)]
+)
+def test_client_retries_one_transient_provider_failure(monkeypatch, first_failure) -> None:
+    attempts = 0
+
+    def flaky_urlopen(_request, timeout):
+        nonlocal attempts
+        assert timeout == 35
+        attempts += 1
+        if attempts == 1:
+            raise first_failure
+        return FakeResponse({"choices": [{"message": {"content": "ready"}}]})
+
+    monkeypatch.setattr("assistant_backend.agent.provider.urlopen", flaky_urlopen)
+    client = ChatCompletionClient(
+        SecretStr("unit-test-key"), "https://api.openai-next.com/v1", "deepseek-v3.2"
+    )
+    assert "".join(chunk.content for chunk in client.stream_chat([], [], 8)) == "ready"
+    assert attempts == 2
 
 
 def test_mimo_base_url_cannot_send_key_to_unapproved_host() -> None:

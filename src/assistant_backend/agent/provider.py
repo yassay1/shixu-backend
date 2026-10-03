@@ -122,40 +122,46 @@ class ChatCompletionClient:
             },
             method="POST",
         )
-        try:
-            with urlopen(request, timeout=35) as response:
-                try:
-                    result = json.load(response)
-                    message = result["choices"][0]["message"]
-                    usage = result.get("usage") or {}
-                    calls = [
-                        ToolCallDelta(
-                            index=index,
-                            call_id=part["id"],
-                            name=part["function"]["name"],
-                            arguments=part["function"]["arguments"],
+        for attempt in range(2):
+            try:
+                with urlopen(request, timeout=35) as response:
+                    try:
+                        result = json.load(response)
+                        message = result["choices"][0]["message"]
+                        usage = result.get("usage") or {}
+                        calls = [
+                            ToolCallDelta(
+                                index=index,
+                                call_id=part["id"],
+                                name=part["function"]["name"],
+                                arguments=part["function"]["arguments"],
+                            )
+                            for index, part in enumerate(message.get("tool_calls") or [])
+                        ]
+                        yield ChatDelta(
+                            content=message.get("content") or "",
+                            tool_calls=calls,
+                            input_tokens=int(usage.get("prompt_tokens", 0)),
+                            output_tokens=int(usage.get("completion_tokens", 0)),
                         )
-                        for index, part in enumerate(message.get("tool_calls") or [])
-                    ]
-                    yield ChatDelta(
-                        content=message.get("content") or "",
-                        tool_calls=calls,
-                        input_tokens=int(usage.get("prompt_tokens", 0)),
-                        output_tokens=int(usage.get("completion_tokens", 0)),
-                    )
-                except (KeyError, IndexError, TypeError, ValueError) as exc:
-                    raise ProviderFailure("MODEL_INVALID_RESPONSE", True) from exc
-        except HTTPError as exc:
-            status = exc.code
-            if status == 401:
-                raise ProviderFailure("MODEL_AUTH_FAILED", False) from None
-            if status == 403:
-                raise ProviderFailure("MODEL_ACCESS_DENIED", False) from None
-            if status == 429:
-                raise ProviderFailure("MODEL_RATE_LIMITED", True) from None
-            raise ProviderFailure("MODEL_PROVIDER_ERROR", status >= 500) from None
-        except (URLError, TimeoutError, OSError) as exc:
-            raise ProviderFailure("MODEL_UNAVAILABLE", True) from exc
+                        return
+                    except (KeyError, IndexError, TypeError, ValueError) as exc:
+                        raise ProviderFailure("MODEL_INVALID_RESPONSE", True) from exc
+            except HTTPError as exc:
+                status = exc.code
+                if status >= 500 and attempt == 0:
+                    continue
+                if status == 401:
+                    raise ProviderFailure("MODEL_AUTH_FAILED", False) from None
+                if status == 403:
+                    raise ProviderFailure("MODEL_ACCESS_DENIED", False) from None
+                if status == 429:
+                    raise ProviderFailure("MODEL_RATE_LIMITED", True) from None
+                raise ProviderFailure("MODEL_PROVIDER_ERROR", status >= 500) from None
+            except (URLError, TimeoutError, OSError) as exc:
+                if attempt == 0:
+                    continue
+                raise ProviderFailure("MODEL_UNAVAILABLE", True) from exc
 
 
 class ChatReportAnalyzer:
