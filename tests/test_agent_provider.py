@@ -143,14 +143,20 @@ def test_openai_next_deepseek_selection_and_request_shape(monkeypatch) -> None:
     )
     client = ChatCompletionClient(*settings.chat_provider)
     tools = TASK_TOOLS
-    assert "".join(chunk.content for chunk in client.stream_chat([], tools, 100)) == "好的"
+    assert (
+        "".join(
+            chunk.content
+            for chunk in client.stream_chat([{"role": "user", "content": "明天交作业"}], tools, 100)
+        )
+        == "好的"
+    )
     request = seen["request"]
     body = json.loads(request.data)
     assert request.full_url == "https://api.openai-next.com/v1/chat/completions"
     assert request.get_header("Authorization") == "Bearer gateway-test-key"
     assert body["model"] == "deepseek-v3.2"
     assert body["max_tokens"] == 100
-    assert body["tool_choice"] == "auto"
+    assert body["tool_choice"] == "required"
     search = next(
         tool["function"] for tool in body["tools"] if tool["function"]["name"] == "search_tasks"
     )

@@ -535,7 +535,10 @@ def test_agent_proposal_tool_requires_confirmation_before_task_write(client: Tes
     conversation = create_conversation(client, "proposal-conversation")
     accepted = client.post(
         f"/api/conversations/{conversation['conversation_id']}/messages",
-        json={"client_message_id": "proposal-question", "content": "请创建一个任务草稿"},
+        json={
+            "client_message_id": "proposal-question",
+            "content": "[应用提供的用户本地时间：2026-10-03 10:00；时区：Asia/Shanghai]\n明天得交数学作业，晚上还要给妈妈打电话。数学题需要再检查半小时。",
+        },
         headers=write_headers(client),
     ).json()
     runs = client.app.state.agent_run_service
@@ -560,18 +563,40 @@ def test_agent_proposal_tool_requires_confirmation_before_task_write(client: Tes
                             arguments=json.dumps(
                                 {
                                     "task": {
-                                        "title": "Prepare demo",
+                                        "title": "交数学作业",
+                                        "description": "检查数学题约半小时",
+                                        "category": "学习",
+                                        "due": {
+                                            "precision": "date",
+                                            "date": "2026-10-04",
+                                            "timezone": "Asia/Shanghai",
+                                        },
+                                        "important": True,
+                                        "urgent": True,
+                                    }
+                                }
+                            ),
+                        ),
+                        ToolCallDelta(
+                            index=1,
+                            call_id="proposal-call-2",
+                            name="propose_create_task",
+                            arguments=json.dumps(
+                                {
+                                    "task": {
+                                        "title": "给妈妈打电话",
+                                        "category": "家庭",
                                         "important": True,
                                         "urgent": False,
                                     }
                                 }
                             ),
-                        )
+                        ),
                     ]
                 )
                 return
             assert any(message["role"] == "tool" for message in messages)
-            yield ChatDelta(content="已保存待确认提案，请确认后写入任务。")
+            yield ChatDelta(content="已整理两项待确认提案，请逐项确认。")
 
     AgentRuntime(
         runs,
@@ -583,16 +608,24 @@ def test_agent_proposal_tool_requires_confirmation_before_task_write(client: Tes
     assert client.get("/api/tasks").json()["items"] == []
     run_proposals = client.get(f"/api/runs/{accepted['run_id']}/proposals")
     assert run_proposals.status_code == 200
-    assert len(run_proposals.json()) == 1
+    assert len(run_proposals.json()) == 2
+    by_title = {item["task"]["title"]: item for item in run_proposals.json()}
+    assert by_title["交数学作业"]["task"] == {
+        "title": "交数学作业",
+        "description": "检查数学题约半小时",
+        "category": "学习",
+        "due": {"precision": "date", "date": "2026-10-04", "timezone": "Asia/Shanghai"},
+        "important": True,
+        "urgent": True,
+    }
+    assert by_title["给妈妈打电话"]["task"]["due"] is None
     with client.app.state.agent_run_service.factory() as session:
-        proposal = session.scalar(
-            select(Proposal).where(Proposal.client_request_id.like("agent:%"))
+        proposals = list(
+            session.scalars(select(Proposal).where(Proposal.client_request_id.like("agent:%")))
         )
-        assert proposal is not None
-        proposal_id = proposal.proposal_id
-        assert proposal.source == "agent"
-        assert proposal.status == "pending"
-    assert run_proposals.json()[0]["proposal_id"] == proposal_id
+        assert len(proposals) == 2
+        assert all(item.source == "agent" and item.status == "pending" for item in proposals)
+    proposal_id = by_title["交数学作业"]["proposal_id"]
 
     confirmed = client.post(
         f"/api/proposals/{proposal_id}/confirm",
@@ -600,7 +633,11 @@ def test_agent_proposal_tool_requires_confirmation_before_task_write(client: Tes
         headers=write_headers(client),
     )
     assert confirmed.status_code == 200
-    assert client.get("/api/tasks").json()["items"][0]["title"] == "Prepare demo"
+    assert client.get("/api/tasks").json()["items"][0]["title"] == "交数学作业"
+    assert (
+        client.get(f"/api/proposals/{by_title['给妈妈打电话']['proposal_id']}").json()["status"]
+        == "pending"
+    )
     register(client, "second_user")
     assert client.get(f"/api/runs/{accepted['run_id']}/proposals").status_code == 404
 

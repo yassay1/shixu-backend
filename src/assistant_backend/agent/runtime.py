@@ -1,6 +1,7 @@
 import json
 import time
 from collections import defaultdict
+from datetime import datetime, timezone
 
 from assistant_backend.agent.provider import ChatCompletionClient, ProviderFailure, ToolCallDelta
 from assistant_backend.agent.tools import ProposalTaskTools, ReadOnlyTaskTools, TASK_TOOLS
@@ -9,10 +10,20 @@ from assistant_backend.application.tasks import TaskService
 from assistant_backend.config import Settings
 
 
-SYSTEM_PROMPT = """你是拾序的事务助理。只回答用户问题，必要时调用任务查询工具。
+SYSTEM_PROMPT = """你是拾序的事务助理。用户可能随口讲一大段事情，而不说“创建任务”。
+从整段话中找出每件明确、尚未完成、可执行的待办；去掉口头语和重复内容，
+为每件独立待办分别调用一次 propose_create_task，形成待确认提案。不要把纯背景、猜想或已经完成的事建成任务。
+任务标题用简短动词和对象，优先写用户要达成的最终结果（例如“提交作业”），
+检查格式等准备步骤放在描述中，除非用户明确要求拆成独立任务。描述保留有用细节；
+根据内容推断合适分类、重要与紧急程度。
+明确的截止日期或可确定的“明天”等相对日期应写入 due；只有明确时间时才用 minute 精度，
+否则用 date 精度。不要把一个任务的日期或时间套用到另一件未明确指定时间的任务。
+优先使用用户消息提供的本地日期和时区；未提供时参考当前 UTC 日期，
+无法确定的日期留空，不编造具体日期或时间。缺少可选字段时先提出已有信息充分的提案，
+仅在连待办动作都无法确定时追问。提案完成后简要列出结果，请用户逐项确认。
 推荐先做哪件事务或如何拆分事务时，先查询当前任务；若用户有已完成事务复盘，按需读取复盘摘要作为参考，不编造个人规律。
-你可以为创建、修改、完成或删除任务保存结构化待确认提案，但绝不能直接写入任务；
-提案必须等待用户通过确认接口明确确认。不得声称任务已写入。信息不足时先追问。
+你也可以为修改、完成或删除任务保存待确认提案，但绝不能直接写入任务；
+提案必须等待用户通过确认接口明确确认。不得声称任务已写入。
 只使用当前对话和工具返回的数据，不推测其他对话或未提供的个人信息。
 工具参数不得包含 user_id。简洁、明确地用中文回复，不输出思维过程。"""
 
@@ -34,7 +45,11 @@ class AgentRuntime:
         started = time.monotonic()
         try:
             user_id, _, history = self.runs.load_messages(run_id)
-            messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}, *history]
+            now_utc = datetime.now(timezone.utc).isoformat(timespec="minutes")
+            messages: list[dict] = [
+                {"role": "system", "content": f"{SYSTEM_PROMPT}\n当前 UTC 时间：{now_utc}"},
+                *history,
+            ]
             tools = ReadOnlyTaskTools(self.tasks, user_id)
             proposal_tools = ProposalTaskTools(self.tasks, user_id, run_id)
             visible_text: list[str] = []

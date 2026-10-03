@@ -12,6 +12,7 @@ from sqlalchemy.engine import make_url
 from assistant_backend.application.speech import (
     LocalWhisperTranscriber,
     SpeechFailure,
+    calibrate,
     validate_wav,
 )
 from assistant_backend.config import Settings
@@ -20,6 +21,15 @@ from assistant_backend.main import create_app
 
 DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 ORIGIN = "https://test.example"
+
+
+def test_narrated_task_can_reach_agent_without_keyword_clarification() -> None:
+    draft = calibrate("我明天得交作业，晚上给妈妈打电话", "Asia/Shanghai")
+    assert draft["intent"] == "unclear"
+    assert draft["needs_clarification"] is False
+    assert (
+        calibrate("我已经完成初稿，明天要提交作业", "Asia/Shanghai")["needs_clarification"] is False
+    )
 
 
 @pytest.fixture

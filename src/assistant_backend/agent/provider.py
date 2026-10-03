@@ -109,7 +109,11 @@ class ChatCompletionClient:
                     for tool in tools
                 ]
             )
-            payload["tool_choice"] = "auto"
+            payload["tool_choice"] = (
+                "required"
+                if not is_mimo and messages and messages[-1]["role"] == "user"
+                else "auto"
+            )
         body = json.dumps(payload, ensure_ascii=False).encode()
         request = Request(
             f"{self.base_url}/chat/completions",

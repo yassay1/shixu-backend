@@ -183,14 +183,15 @@ def calibrate(text: str, timezone_name: str, confidence: float | None = None) ->
         question = "日期或时间无法确认，请修改草稿。"
     elif due_time and not due_date:
         question = "请补充日期，以便确定具体时间。"
-    elif intent in {"update", "complete", "delete"}:
+    elif intent in {"update", "complete", "delete"} and re.fullmatch(
+        r"(?:请)?(?:删除|删掉|完成|做完|修改|改成|更新)(?:这个|该|任务|事务|这件事)?[。.!！]?",
+        normalized,
+    ):
         question = "请确认要操作的具体任务。"
     elif intent == "create" and re.fullmatch(
         r"(?:请)?(?:创建|新建|新增|记下|提醒我)(?:一个任务|任务)?[。.!！]?", normalized
     ):
         question = "请补充要记录的任务内容。"
-    elif intent == "unclear":
-        question = "请说明要创建、查询还是修改任务。"
     return {
         "draft_text": normalized,
         "intent": intent,
