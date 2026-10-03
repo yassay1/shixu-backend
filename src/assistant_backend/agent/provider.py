@@ -6,6 +6,8 @@ from urllib.request import Request, urlopen
 
 from pydantic import SecretStr
 
+from assistant_backend.application.reports import ReportInsight
+
 
 @dataclass
 class ToolCallDelta:
@@ -101,3 +103,31 @@ class MimoClient:
             raise ProviderFailure("MODEL_PROVIDER_ERROR", status >= 500) from None
         except (URLError, TimeoutError, OSError) as exc:
             raise ProviderFailure("MODEL_UNAVAILABLE", True) from exc
+
+
+class MimoReportAnalyzer:
+    def __init__(self, client: MimoClient) -> None:
+        self.client = client
+
+    def __call__(self, title: str, body: str) -> ReportInsight:
+        prompt = (
+            "你分析用户完成事务后的简短复盘。只返回 JSON，恰好有 summary、blocker、next_step 三个字符串。"
+            "summary 简述实际完成情况；blocker 提取阻碍，未提及则为空；"
+            "next_step 提取下次可执行的改进，证据不足则为空。"
+            "只根据报告内容，不诊断健康或推测人格。每个字段不超过 240 字。"
+        )
+        content = "".join(
+            delta.content
+            for delta in self.client.stream_chat(
+                [
+                    {"role": "system", "content": prompt},
+                    {
+                        "role": "user",
+                        "content": json.dumps({"task": title, "report": body}, ensure_ascii=False),
+                    },
+                ],
+                [],
+                500,
+            )
+        )
+        return ReportInsight.model_validate_json(content)

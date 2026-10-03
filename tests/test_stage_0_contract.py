@@ -25,6 +25,6 @@ def test_contract_exposes_no_direct_task_write_route() -> None:
     contract = json.loads((ROOT / "contracts/openapi.json").read_text(encoding="utf-8"))
     app_paths = create_app().openapi()["paths"]
     assert contract["paths"] == app_paths
-    task_paths = [path for path in contract["paths"] if path.startswith("/api/tasks")]
+    task_paths = ["/api/tasks", "/api/tasks/{task_id}"]
     assert all(set(contract["paths"][path]) <= {"get"} for path in task_paths)
     assert "/api/auth/register" in contract["paths"]

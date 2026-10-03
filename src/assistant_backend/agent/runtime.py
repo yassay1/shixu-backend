@@ -10,6 +10,7 @@ from assistant_backend.config import Settings
 
 
 SYSTEM_PROMPT = """你是拾序的事务助理。只回答用户问题，必要时调用任务查询工具。
+推荐先做哪件事务或如何拆分事务时，先查询当前任务；若用户有已完成事务复盘，按需读取复盘摘要作为参考，不编造个人规律。
 你可以为创建、修改、完成或删除任务保存结构化待确认提案，但绝不能直接写入任务；
 提案必须等待用户通过确认接口明确确认。不得声称任务已写入。信息不足时先追问。
 只使用当前对话和工具返回的数据，不推测其他对话或未提供的个人信息。
@@ -126,6 +127,7 @@ class AgentRuntime:
                             not in {
                                 "search_tasks",
                                 "get_task",
+                                "search_task_reports",
                                 "propose_create_task",
                                 "propose_update_task",
                                 "propose_complete_task",

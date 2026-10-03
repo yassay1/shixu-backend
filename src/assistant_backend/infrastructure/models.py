@@ -87,6 +87,26 @@ class Task(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class TaskReport(Base):
+    __tablename__ = "task_reports"
+    __table_args__ = (
+        UniqueConstraint("user_id", "task_id", name="uq_task_reports_user_task"),
+        CheckConstraint("analysis_attempts BETWEEN 0 AND 3", name="ck_task_reports_attempts"),
+        Index("ix_task_reports_user_created", "user_id", "created_at"),
+    )
+
+    report_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.user_id", ondelete="CASCADE"))
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.task_id", ondelete="CASCADE"))
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str | None] = mapped_column(String(240))
+    blocker: Mapped[str | None] = mapped_column(String(240))
+    next_step: Mapped[str | None] = mapped_column(String(240))
+    analysis_attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Proposal(Base):
     __tablename__ = "proposals"
     __table_args__ = (

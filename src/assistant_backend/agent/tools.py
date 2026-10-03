@@ -33,7 +33,25 @@ class GetTaskArguments(BaseModel):
     task_id: str = Field(min_length=1, max_length=36)
 
 
+class SearchReportArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    limit: int = Field(default=10, ge=1, le=10)
+
+
 READ_ONLY_TASK_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_task_reports",
+            "description": "Read recent completed-task report insights for this user. Use when recommending or dividing future work.",
+            "parameters": {
+                "type": "object",
+                "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 10}},
+                "additionalProperties": False,
+            },
+        },
+    },
     {
         "type": "function",
         "function": {
@@ -181,6 +199,11 @@ class ReadOnlyTaskTools:
 
     def invoke(self, name: str, raw_arguments: str) -> str:
         try:
+            if name == "search_task_reports":
+                args = SearchReportArguments.model_validate_json(raw_arguments)
+                return json.dumps(
+                    self.service.report_insights(self.user_id, args.limit), ensure_ascii=False
+                )
             if name == "search_tasks":
                 args = SearchTaskArguments.model_validate_json(raw_arguments)
                 result = self.service.list(

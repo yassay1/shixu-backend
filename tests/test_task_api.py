@@ -16,6 +16,7 @@ from assistant_backend.config import Settings
 from assistant_backend.agent.provider import ChatDelta, ProviderFailure, ToolCallDelta
 from assistant_backend.agent.runtime import AgentRuntime
 from assistant_backend.agent.tools import ProposalTaskTools, ReadOnlyTaskTools
+from assistant_backend.application.reports import ReportInsight
 from assistant_backend.infrastructure.models import AgentRun, Message, Proposal, RunEvent, User
 from assistant_backend.main import create_app
 from assistant_backend.presentation.agent import _event_stream
@@ -602,6 +603,77 @@ def test_agent_proposal_tool_requires_confirmation_before_task_write(client: Tes
     assert client.get("/api/tasks").json()["items"][0]["title"] == "Prepare demo"
     register(client, "second_user")
     assert client.get(f"/api/runs/{accepted['run_id']}/proposals").status_code == 404
+
+
+def test_completed_task_report_is_analyzed_and_account_scoped(client: TestClient) -> None:
+    register(client, "report_owner")
+    task = confirm(
+        client,
+        propose(
+            client,
+            {
+                "client_request_id": "report-task",
+                "operation": "create",
+                "task": {"title": "Prepare demo"},
+            },
+        )["proposal_id"],
+    )["task"]
+    path = f"/api/tasks/{task['task_id']}/report"
+    assert (
+        client.post(
+            path, json={"body": "I needed more time"}, headers=write_headers(client)
+        ).status_code
+        == 409
+    )
+    complete = propose(
+        client,
+        {
+            "client_request_id": "finish-report-task",
+            "operation": "complete",
+            "task_id": task["task_id"],
+            "expected_version": task["version"],
+        },
+    )
+    confirm(client, complete["proposal_id"], "finish-report-key")
+
+    def unavailable(_title: str, _body: str) -> ReportInsight:
+        raise RuntimeError("temporary model failure")
+
+    client.app.state.report_service.analyzer = unavailable
+    pending = client.post(path, json={"body": "I needed more time"}, headers=write_headers(client))
+    assert pending.status_code == 201
+    assert pending.json()["status"] == "pending"
+    assert client.get(path).json()["body"] == "I needed more time"
+    client.app.state.report_service.analyzer = lambda _title, _body: ReportInsight(
+        summary="Finished after extra preparation",
+        blocker="Time estimate was short",
+        next_step="Plan a longer preparation block",
+    )
+    saved = client.post(path, json={"body": "I needed more time"}, headers=write_headers(client))
+    assert saved.status_code == 201, saved.text
+    assert saved.json()["report_id"] == pending.json()["report_id"]
+    assert saved.json()["status"] == "analyzed"
+    assert saved.json()["blocker"] == "Time estimate was short"
+    assert client.get(path).json()["report_id"] == saved.json()["report_id"]
+    assert (
+        client.post(
+            path, json={"body": "I needed more time"}, headers=write_headers(client)
+        ).json()["report_id"]
+        == saved.json()["report_id"]
+    )
+    assert (
+        client.post(path, json={"body": "Different"}, headers=write_headers(client)).status_code
+        == 409
+    )
+    assert "Time estimate was short" in ReadOnlyTaskTools(
+        client.app.state.task_service, current_user_id(client)
+    ).invoke("search_task_reports", "{}")
+    register(client, "report_other")
+    assert client.get(path).status_code == 404
+    assert (
+        client.post(path, json={"body": "Not mine"}, headers=write_headers(client)).status_code
+        == 404
+    )
 
 
 def test_agent_proposal_tools_cover_all_task_operations_without_direct_write(

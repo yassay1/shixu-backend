@@ -9,6 +9,8 @@ from assistant_backend.application.identity import AuthFailure, IdentityService
 from assistant_backend.application.agent_runs import AgentRunService, RunFailure
 from assistant_backend.application.conversations import ConversationFailure, ConversationService
 from assistant_backend.application.tasks import TaskFailure, TaskService
+from assistant_backend.application.reports import ReportService
+from assistant_backend.agent.provider import MimoClient, MimoReportAnalyzer
 from assistant_backend.application.speech import SpeechFailure, SpeechService
 from assistant_backend.config import Settings
 from assistant_backend.infrastructure.database import make_engine, make_session_factory
@@ -28,6 +30,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.identity_service = IdentityService(factory, settings)
     app.state.task_service = TaskService(factory)
+    app.state.report_service = ReportService(
+        factory,
+        MimoReportAnalyzer(
+            MimoClient(settings.mimo_api_key, settings.mimo_base_url, settings.mimo_model)
+        ),
+    )
     app.state.conversation_service = ConversationService(factory)
     app.state.agent_run_service = AgentRunService(factory, settings)
     app.state.speech_service = SpeechService(factory, settings)

@@ -2,9 +2,11 @@ from datetime import date
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, Depends, Query, Request
+from pydantic import BaseModel, Field
 
 from assistant_backend.application.identity import SessionIdentity
 from assistant_backend.application.tasks import TaskService
+from assistant_backend.application.reports import ReportView
 from assistant_backend.presentation.auth import get_identity, require_csrf, require_origin
 from assistant_backend.presentation.errors import ErrorResponse
 from assistant_backend.presentation.schemas import (
@@ -32,6 +34,34 @@ router = APIRouter(
 
 def get_service(request: Request) -> TaskService:
     return request.app.state.task_service
+
+
+class ReportSubmitRequest(BaseModel):
+    body: str = Field(min_length=1, max_length=2000)
+
+
+@router.get("/tasks/{task_id}/report", response_model=ReportView)
+def get_task_report(
+    task_id: str,
+    request: Request,
+    identity: Annotated[SessionIdentity, Depends(get_identity)],
+) -> ReportView:
+    return request.app.state.report_service.get(identity.user_id, task_id)
+
+
+@router.post(
+    "/tasks/{task_id}/report",
+    response_model=ReportView,
+    status_code=201,
+    dependencies=[Depends(require_origin), Depends(require_csrf)],
+)
+def submit_task_report(
+    task_id: str,
+    body: ReportSubmitRequest,
+    request: Request,
+    identity: Annotated[SessionIdentity, Depends(get_identity)],
+) -> ReportView:
+    return request.app.state.report_service.submit(identity.user_id, task_id, body.body)
 
 
 @router.get("/tasks", response_model=TaskListResponse)

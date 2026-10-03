@@ -152,11 +152,15 @@ Worker 由 `uv run python -m assistant_backend.worker` 启动，使用数据库 
 |---|---|
 | POST /api/proposals | 保存手动创建、更新、完成或删除任务的待确认意图，不修改任务 |
 | GET /api/runs/{run_id}/proposals | 列出当前账号该 Agent run 保存的提案，供前端逐项确认 |
+| POST /api/tasks/{task_id}/report | 已完成事务提交一份文字复盘；先保存原文，再尝试生成摘要、阻碍和下次行动 |
+| GET /api/tasks/{task_id}/report | 读取当前账号的原文、分析字段及状态 |
 | GET /api/proposals/{proposal_id} | 读取当前账号提案预览与状态 |
 | POST /api/proposals/{proposal_id}/confirm | 用户确认并执行提案 |
 | POST /api/proposals/{proposal_id}/cancel | 用户取消提案 |
 
 阶段 2 的手动提案请求含 `client_request_id`、`operation`（`create`/`update`/`complete`/`delete`）；创建提供 `task`，更新提供 `task_id`、`expected_version`、`changes`，完成与删除提供 `task_id`、`expected_version`。同账号重用 `client_request_id` 且内容相同返回同一提案，不同则 409。确认 JSON 正文携带 `idempotency_key`；同一键重复确认返回原回执，异键返回 409。提案 15 分钟有效，确认时重查归属、状态、期限和任务版本，删除会使该任务其他待确认提案失效。手动提案不带 conversation_id；Agent 接入留到阶段 5。所有提案写请求校验 Origin 和 `X-CSRF-Token`，账号来自 Cookie。LLM 输出提案不表示事务已经写入；只有提交成功的数据库回执才能作为成功响应。
+
+完成报告请求为 `{ "body": "..." }`，限 1–2000 字，仅已完成事务可提交，每件事务一份；重复提交相同正文返回原报告，不同正文返回 `409 REPORT_EXISTS`。原文先持久化；模型分析失败时返回 `pending`，相同请求可重试，最多分析三次，然后状态为 `unavailable`。成功时 `status=analyzed`，返回 `summary`、`blocker`、`next_step`。报告随事务永久删除；Agent 的 `search_task_reports` 只读取本账号已有的分析字段，用于后续推荐，不向模型提供其他账号报告。
 
 ## 7. 内部 Agent Tools
 

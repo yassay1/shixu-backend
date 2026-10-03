@@ -12,7 +12,7 @@ from sqlalchemy import and_, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from assistant_backend.infrastructure.models import Proposal, Task
+from assistant_backend.infrastructure.models import Proposal, Task, TaskReport
 from assistant_backend.presentation.schemas import (
     ConfirmationReceipt,
     DateDue,
@@ -161,6 +161,25 @@ class TaskService:
                 raw = json.dumps([last.created_at.isoformat(), last.task_id]).encode()
                 next_cursor = base64.urlsafe_b64encode(raw).decode().rstrip("=")
             return TaskListResponse(items=items, next_cursor=next_cursor)
+
+    def report_insights(self, user_id: str, limit: int = 10) -> list[dict[str, str]]:
+        with self.factory() as session:
+            rows = session.execute(
+                select(Task.title, TaskReport.summary, TaskReport.blocker, TaskReport.next_step)
+                .join(Task, Task.task_id == TaskReport.task_id)
+                .where(TaskReport.user_id == user_id, TaskReport.analyzed_at.is_not(None))
+                .order_by(TaskReport.created_at.desc())
+                .limit(limit)
+            )
+            return [
+                {
+                    "task": title,
+                    "summary": summary or "",
+                    "blocker": blocker or "",
+                    "next_step": next_step or "",
+                }
+                for title, summary, blocker, next_step in rows
+            ]
 
     def create_proposal(
         self, user_id: str, body: ProposalCreateRequest, *, source: str = "manual"
