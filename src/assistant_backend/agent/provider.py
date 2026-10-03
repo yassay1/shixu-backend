@@ -31,7 +31,7 @@ class ProviderFailure(Exception):
         self.retryable = retryable
 
 
-class MimoClient:
+class ChatCompletionClient:
     """Small OpenAI-compatible client; errors never include provider bodies."""
 
     def __init__(self, api_key: SecretStr | None, base_url: str, model: str) -> None:
@@ -47,18 +47,31 @@ class MimoClient:
     ) -> Iterator[ChatDelta]:
         if self.api_key is None or not self.api_key.get_secret_value():
             raise ProviderFailure("MODEL_NOT_CONFIGURED", False)
-        body = json.dumps(
-            {
-                "model": self.model,
-                "messages": messages,
-                "tools": tools,
-                "tool_choice": "auto",
-                "stream": False,
-                "max_completion_tokens": max_output_tokens,
-                "thinking": {"type": "disabled"},
-            },
-            ensure_ascii=False,
-        ).encode()
+        is_mimo = self.base_url == "https://api.xiaomimimo.com/v1"
+        payload: dict = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "max_completion_tokens" if is_mimo else "max_tokens": max_output_tokens,
+        }
+        if is_mimo:
+            payload["thinking"] = {"type": "disabled"}
+        if tools:
+            payload["tools"] = (
+                tools
+                if is_mimo
+                else [
+                    {
+                        **tool,
+                        "function": {
+                            key: value for key, value in tool["function"].items() if key != "strict"
+                        },
+                    }
+                    for tool in tools
+                ]
+            )
+            payload["tool_choice"] = "auto"
+        body = json.dumps(payload, ensure_ascii=False).encode()
         request = Request(
             f"{self.base_url}/chat/completions",
             data=body,
@@ -66,6 +79,7 @@ class MimoClient:
                 "Authorization": f"Bearer {self.api_key.get_secret_value()}",
                 "Content-Type": "application/json",
                 "Accept": "application/json",
+                "User-Agent": "ShixuBackend/0.3",
             },
             method="POST",
         )
@@ -105,8 +119,8 @@ class MimoClient:
             raise ProviderFailure("MODEL_UNAVAILABLE", True) from exc
 
 
-class MimoReportAnalyzer:
-    def __init__(self, client: MimoClient) -> None:
+class ChatReportAnalyzer:
+    def __init__(self, client: ChatCompletionClient) -> None:
         self.client = client
 
     def __call__(self, title: str, body: str) -> ReportInsight:

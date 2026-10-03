@@ -21,7 +21,12 @@ services:
       APP_ORIGIN: ${LOCAL_APP_ORIGIN:-http://localhost:8000}
       DATABASE_URL: postgresql+psycopg://shixu:local-dev-password@db:5432/shixu
       CSRF_SECRET: ${CSRF_SECRET:-local-development-csrf-secret-change-me}
+      OPENAI_NEXT_API_KEY: ${OPENAI_NEXT_API_KEY:-}
+      OPENAI_NEXT_BASE_URL: ${OPENAI_NEXT_BASE_URL:-https://api.openai-next.com/v1}
+      OPENAI_NEXT_MODEL: ${OPENAI_NEXT_MODEL:-deepseek-v3.2}
       MIMO_API_KEY: ${MIMO_API_KEY:-}
+      MIMO_BASE_URL: ${MIMO_BASE_URL:-https://api.xiaomimimo.com/v1}
+      MIMO_MODEL: ${MIMO_MODEL:-mimo-v2.6-flash}
     command: sh -c "alembic upgrade head && uvicorn assistant_backend.main:app --host 0.0.0.0 --port 8000"
     ports:
       - "127.0.0.1:${LOCAL_API_PORT:-8000}:8000"

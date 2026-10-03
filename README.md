@@ -32,9 +32,9 @@ docker compose down              # 停止，保留数据库数据
 docker compose down -v           # 重置本地数据库，删除所有本地数据
 ```
 
-默认不启动 Agent worker，浏览 `/docs`、认证和任务 API 不需要 MiMo 密钥。需要运行 Agent 时，把有效的 `MIMO_API_KEY` 放入本地 `.env`（已被 Git 和 Docker 构建忽略），再运行 `docker compose --profile agent up --build -d --wait`。没有有效密钥时 Agent run 会失败；阶段 4 的真实凭证验证仍待完成。
+默认不启动 Agent worker，浏览 `/docs`、认证和任务 API 不需要模型密钥。若要试用 OpenAI Next 的 DeepSeek，在本地 `.env` 填入 `OPENAI_NEXT_API_KEY`；`.env.example` 已列出 `OPENAI_NEXT_BASE_URL=https://api.openai-next.com/v1` 和 `OPENAI_NEXT_MODEL=deepseek-v3.2`。然后运行 `LOCAL_APP_ORIGIN=http://localhost:5173 docker compose --profile agent up --build -d --wait`。有 OpenAI Next 密钥时 Agent 和完成报告分析都使用 DeepSeek；否则沿用 `MIMO_API_KEY` 和 MiMo。密钥只放在被 Git 忽略的本地 `.env`，不要提交。
 
-前端联调应让浏览器请求同源 `/api/...`：开发时在 Vite 配置 `/api` 代理，并用 `LOCAL_APP_ORIGIN=http://localhost:5173 docker compose up -d` 匹配前端页面 origin。当前 Vite 代理尚未实现；直接跨端口请求会遇到 CORS。生产环境需要同源 HTTPS 反向代理。详见[接入计划](../../frontend/docs/backend-api-data-model.md)。
+前端联调让浏览器请求同源 `/api/...`：Vite 已配置 `/api` 代理，后端的 `LOCAL_APP_ORIGIN` 应与实际前端地址一致（默认 `http://localhost:5173`）。生产环境需要同源 HTTPS 反向代理。详见[接入计划](../../frontend/docs/backend-api-data-model.md)。
 
 ## 不使用 Docker 开发
 

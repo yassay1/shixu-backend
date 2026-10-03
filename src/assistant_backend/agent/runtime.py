@@ -2,7 +2,7 @@ import json
 import time
 from collections import defaultdict
 
-from assistant_backend.agent.provider import MimoClient, ProviderFailure, ToolCallDelta
+from assistant_backend.agent.provider import ChatCompletionClient, ProviderFailure, ToolCallDelta
 from assistant_backend.agent.tools import ProposalTaskTools, ReadOnlyTaskTools, TASK_TOOLS
 from assistant_backend.application.agent_runs import AgentRunService, RunFailure
 from assistant_backend.application.tasks import TaskService
@@ -22,7 +22,7 @@ class AgentRuntime:
         self,
         runs: AgentRunService,
         tasks: TaskService,
-        provider: MimoClient,
+        provider: ChatCompletionClient,
         settings: Settings,
     ) -> None:
         self.runs = runs

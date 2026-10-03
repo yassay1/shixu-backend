@@ -1,7 +1,7 @@
 import time
 from uuid import uuid4
 
-from assistant_backend.agent.provider import MimoClient
+from assistant_backend.agent.provider import ChatCompletionClient
 from assistant_backend.agent.runtime import AgentRuntime
 from assistant_backend.application.agent_runs import AgentRunService
 from assistant_backend.application.tasks import TaskService
@@ -17,7 +17,7 @@ def run_worker() -> None:
     runtime = AgentRuntime(
         runs,
         TaskService(factory),
-        MimoClient(settings.mimo_api_key, settings.mimo_base_url, settings.mimo_model),
+        ChatCompletionClient(*settings.chat_provider),
         settings,
     )
     worker_id = str(uuid4())

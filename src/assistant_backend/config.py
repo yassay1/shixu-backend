@@ -1,6 +1,6 @@
 from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     session_cookie_name: str = "shixu_session"
     app_origin: str = "http://localhost:8000"
     csrf_secret: str = "development-only-change-me"
+    openai_next_api_key: SecretStr | None = None
+    openai_next_base_url: str = "https://api.openai-next.com/v1"
+    openai_next_model: str = "deepseek-v3.2"
     mimo_api_key: SecretStr | None = None
     mimo_base_url: str = "https://api.xiaomimimo.com/v1"
     mimo_model: str = "mimo-v2.6-flash"
@@ -29,21 +32,30 @@ class Settings(BaseSettings):
     agent_event_retention_days: int = Field(default=7, gt=0)
     speech_model_path: str | None = None
 
-    @field_validator("mimo_base_url")
+    @field_validator("openai_next_base_url", "mimo_base_url")
     @classmethod
-    def validate_mimo_base_url(cls, value: str) -> str:
+    def validate_model_base_url(cls, value: str, info: ValidationInfo) -> str:
+        host = (
+            "api.openai-next.com"
+            if info.field_name == "openai_next_base_url"
+            else "api.xiaomimimo.com"
+        )
         parsed = urlsplit(value)
         if (
             parsed.scheme != "https"
-            or parsed.hostname != "api.xiaomimimo.com"
-            or parsed.username is not None
-            or parsed.password is not None
+            or parsed.netloc != host
             or parsed.query
             or parsed.fragment
             or parsed.path.rstrip("/") != "/v1"
         ):
-            raise ValueError("MIMO_BASE_URL must use the official HTTPS API endpoint")
-        return "https://api.xiaomimimo.com/v1"
+            raise ValueError(f"{info.field_name.upper()} must use the official HTTPS API endpoint")
+        return f"https://{host}/v1"
+
+    @property
+    def chat_provider(self) -> tuple[SecretStr | None, str, str]:
+        if self.openai_next_api_key and self.openai_next_api_key.get_secret_value().strip():
+            return self.openai_next_api_key, self.openai_next_base_url, self.openai_next_model
+        return self.mimo_api_key, self.mimo_base_url, self.mimo_model
 
     @model_validator(mode="after")
     def validate_production(self) -> "Settings":

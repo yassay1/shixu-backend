@@ -5,7 +5,8 @@ from urllib.error import HTTPError
 import pytest
 from pydantic import SecretStr
 
-from assistant_backend.agent.provider import MimoClient, ProviderFailure
+from assistant_backend.agent.provider import ChatCompletionClient, ProviderFailure
+from assistant_backend.config import Settings
 
 
 class FakeResponse(io.BytesIO):
@@ -46,7 +47,7 @@ def test_mimo_client_parses_tool_response_and_keeps_api_key_in_header(monkeypatc
         return response
 
     monkeypatch.setattr("assistant_backend.agent.provider.urlopen", fake_urlopen)
-    client = MimoClient(
+    client = ChatCompletionClient(
         SecretStr("unit-test-key"), "https://api.xiaomimimo.com/v1", "mimo-v2.6-flash"
     )
     chunks = list(client.stream_chat([{"role": "user", "content": "test"}], [], 8))
@@ -57,6 +58,7 @@ def test_mimo_client_parses_tool_response_and_keeps_api_key_in_header(monkeypatc
     assert chunks[-1].output_tokens == 4
     assert seen["request"].full_url == "https://api.xiaomimimo.com/v1/chat/completions"
     assert seen["request"].get_header("Authorization") == "Bearer unit-test-key"
+    assert seen["request"].get_header("User-agent") == "ShixuBackend/0.3"
     assert seen["timeout"] == 35
     request_body = json.loads(seen["request"].data)
     assert request_body["model"] == "mimo-v2.6-flash"
@@ -83,7 +85,7 @@ def test_mimo_client_maps_provider_auth_failure_without_response_body(
         )
 
     monkeypatch.setattr("assistant_backend.agent.provider.urlopen", unauthorized)
-    client = MimoClient(
+    client = ChatCompletionClient(
         SecretStr("unit-test-key"), "https://api.xiaomimimo.com/v1", "mimo-v2.6-flash"
     )
     with pytest.raises(ProviderFailure) as error:
@@ -93,7 +95,45 @@ def test_mimo_client_maps_provider_auth_failure_without_response_body(
 
 
 def test_mimo_base_url_cannot_send_key_to_unapproved_host() -> None:
-    from assistant_backend.config import Settings
-
     with pytest.raises(ValueError, match="official HTTPS API endpoint"):
         Settings(_env_file=None, mimo_base_url="https://not-mimo.example/v1")
+
+
+def test_openai_next_deepseek_selection_and_request_shape(monkeypatch) -> None:
+    seen = {}
+
+    def fake_urlopen(request, timeout):
+        seen["request"] = request
+        assert timeout == 35
+        return FakeResponse({"choices": [{"message": {"content": "好的"}}]})
+
+    monkeypatch.setattr("assistant_backend.agent.provider.urlopen", fake_urlopen)
+    settings = Settings(
+        _env_file=None,
+        openai_next_api_key="gateway-test-key",
+        mimo_api_key="mimo-test-key",
+    )
+    client = ChatCompletionClient(*settings.chat_provider)
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "search_tasks", "strict": True, "parameters": {"type": "object"}},
+        }
+    ]
+    assert "".join(chunk.content for chunk in client.stream_chat([], tools, 100)) == "好的"
+    request = seen["request"]
+    body = json.loads(request.data)
+    assert request.full_url == "https://api.openai-next.com/v1/chat/completions"
+    assert request.get_header("Authorization") == "Bearer gateway-test-key"
+    assert body["model"] == "deepseek-v3.2"
+    assert body["max_tokens"] == 100
+    assert body["tool_choice"] == "auto"
+    assert "strict" not in body["tools"][0]["function"]
+    assert "thinking" not in body
+    assert "max_completion_tokens" not in body
+    assert tools[0]["function"]["strict"] is True
+
+
+def test_openai_next_base_url_cannot_send_key_to_unapproved_host() -> None:
+    with pytest.raises(ValueError, match="official HTTPS API endpoint"):
+        Settings(_env_file=None, openai_next_base_url="https://example.com/v1")
